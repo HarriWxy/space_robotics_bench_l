@@ -24,6 +24,7 @@ from srb.utils.math import (
 )
 
 from .asset import select_sample
+from .terrain import terrain_surface_heights
 from .task import EventCfg, SceneCfg, TaskCfg
 
 ##############
@@ -144,6 +145,22 @@ class MultiTask(ManipulationEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
+        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if self.scene.scenery is not None:
+            object_pose = self._objs.data.object_link_pose_w[env_ids_tensor].clone()
+            flat_object_pose = object_pose.reshape(-1, 7)
+            flat_env_ids = env_ids_tensor.repeat_interleave(self.cfg.num_samples)
+            terrain_heights = terrain_surface_heights(
+                self.scene.scenery.prim_path,
+                flat_object_pose[:, :3],
+                self.scene.env_origins,
+                flat_env_ids,
+            )
+            flat_object_pose[:, 2] = terrain_heights + 0.08
+            self._objs.write_object_pose_to_sim(
+                flat_object_pose.reshape(len(env_ids_tensor), self.cfg.num_samples, 7),
+                env_ids=env_ids_tensor,
+            )
         self._tf_pos_objs_initial[env_ids] = self._objs.data.object_com_pos_w[env_ids]
 
     def extract_step_return(self) -> StepReturn:

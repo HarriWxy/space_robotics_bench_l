@@ -35,7 +35,7 @@ class MoonRock(Object):
             assets=[simforge_foundry.MoonRock()],
             collision_props=CollisionPropertiesCfg(),
             mesh_collision_props=MeshCollisionPropertiesCfg(
-                mesh_approximation="convexHull"
+                mesh_approximation="convexDecomposition"
             ),
             rigid_props=RigidBodyPropertiesCfg(),
             mass_props=MassPropertiesCfg(density=2000.0),

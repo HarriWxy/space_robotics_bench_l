@@ -32,6 +32,7 @@ from srb.utils.math import (
 )
 
 from .asset import select_sample
+from .terrain import terrain_surface_heights
 
 ##############
 ### Config ###
@@ -146,6 +147,20 @@ class Task(ManipulationEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
+        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if self.scene.scenery is not None:
+            root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
+            terrain_heights = terrain_surface_heights(
+                self.scene.scenery.prim_path,
+                root_pose,
+                self.scene.env_origins,
+                env_ids_tensor,
+            )
+            root_pose[:, 2] = terrain_heights + 0.08
+            self._obj.write_root_pose_to_sim(
+                torch.cat([root_pose, self._obj.data.root_quat_w[env_ids_tensor]], dim=-1),
+                env_ids=env_ids_tensor,
+            )
         self._tf_pos_obj_initial[env_ids] = self._obj.data.root_com_pos_w[env_ids]
 
     def extract_step_return(self) -> StepReturn:
