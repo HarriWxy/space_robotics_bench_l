@@ -54,9 +54,9 @@ class UnitreeA1(LeggedRobot):
         actuators={
             "base_legs": DCMotorCfg(
                 joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
-                effort_limit=33.5,
+                effort_limit_sim=33.5,
                 saturation_effort=33.5,
-                velocity_limit=21.0,
+                velocity_limit_sim=21.0,
                 stiffness=25.0,
                 damping=0.5,
                 friction=0.0,
@@ -141,8 +141,8 @@ class UnitreeGo1(LeggedRobot):
                 torque_scale=1.0,
                 input_order="pos_vel",
                 input_idx=[0, 1, 2],
-                effort_limit=23.7,
-                velocity_limit=30.0,
+                effort_limit_sim=23.7,
+                velocity_limit_sim=30.0,
                 saturation_effort=23.7,
             ),
         },
@@ -219,9 +219,9 @@ class UnitreeGo2(LeggedRobot):
         actuators={
             "base_legs": DCMotorCfg(
                 joint_names_expr=[".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"],
-                effort_limit=33.5,
+                effort_limit_sim=33.5,
                 saturation_effort=33.5,
-                velocity_limit=21.0,
+                velocity_limit_sim=21.0,
                 stiffness=25.0,
                 damping=0.5,
                 friction=0.0,

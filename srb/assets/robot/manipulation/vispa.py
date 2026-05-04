@@ -58,8 +58,8 @@ class Vispa(SerialManipulator):
         actuators={
             "joints": ImplicitActuatorCfg(
                 joint_names_expr=["joint[1-6]"],
-                effort_limit=500.0,
-                velocity_limit=5.0,
+                effort_limit_sim=500.0,
+                velocity_limit_sim=5.0,
                 stiffness=2500.0,
                 damping=500.0,
             ),

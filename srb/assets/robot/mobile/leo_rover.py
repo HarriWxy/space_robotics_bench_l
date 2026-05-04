@@ -37,15 +37,15 @@ class LeoRover(WheeledRobot):
         actuators={
             "drive": ImplicitActuatorCfg(
                 joint_names_expr=["wheel_joint_.*"],
-                effort_limit=80.0,
-                velocity_limit=30.0,
+                effort_limit_sim=80.0,
+                velocity_limit_sim=30.0,
                 stiffness=0.0,
                 damping=5000.0,
             ),
             "rocker": ImplicitActuatorCfg(
                 joint_names_expr=["rocker_joint_.*"],
-                velocity_limit=2.0,
-                effort_limit=500.0,
+                velocity_limit_sim=2.0,
+                effort_limit_sim=500.0,
                 damping=0.5,
                 stiffness=2.0,
             ),

@@ -6,9 +6,10 @@ from isaacsim.core.prims import SingleXFormPrim
 from isaacsim.core.utils.articulations import move_articulation_root
 from isaacsim.core.utils.prims import (
     get_articulation_root_api_prim_path,
-    get_prim_at_path,
-    is_prim_path_valid,
+    # get_prim_at_path,
+    # is_prim_path_valid,
 )
+import isaaclab.sim as sim_utils
 from isaacsim.core.utils.stage import get_current_stage
 from isaacsim.core.utils.string import find_unique_string_name
 from isaacsim.robot_setup.assembler import RobotAssembler as __RobotAssembler
@@ -46,8 +47,9 @@ class RobotAssembler(__RobotAssembler):
             base_mount_path = (
                 f"{cfg.base_path}/{cfg.attach_path.split('/')[-1]}_mount_frame"
             )
+            stage = sim_utils.get_current_stage()
             base_mount_path = find_unique_string_name(
-                base_mount_path, lambda x: not is_prim_path_valid(x)
+                base_mount_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
             )
             SingleXFormPrim(base_mount_path, translation=(0, 0, 0))
 
@@ -59,14 +61,16 @@ class RobotAssembler(__RobotAssembler):
             attach_mount_path = (
                 f"{cfg.attach_path}/{cfg.base_path.split('/')[-1]}_mount_frame"
             )
+            stage = sim_utils.get_current_stage()
             attach_mount_path = find_unique_string_name(
-                attach_mount_path, lambda x: not is_prim_path_valid(x)
+                attach_mount_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
             )
             SingleXFormPrim(attach_mount_path, translation=(0, 0, 0))
 
         # Get the prim and articulation root of the attached asset
-        attach_prim = get_prim_at_path(cfg.attach_path)
-        articulation_root = get_prim_at_path(
+        stage = sim_utils.get_current_stage()
+        attach_prim = stage.GetPrimAtPath(cfg.attach_path)
+        articulation_root = stage.GetPrimAtPath(
             get_articulation_root_api_prim_path(cfg.attach_path)
         )
 
@@ -120,7 +124,8 @@ class RobotAssembler(__RobotAssembler):
         assemblage = self.assemble_rigid_bodies(cfg=cfg)
 
         if single_robot:
-            art_b_prim = get_prim_at_path(cfg.attach_path)
+            stage = sim_utils.get_current_stage()
+            art_b_prim = stage.GetPrimAtPath(cfg.attach_path)
             if art_b_prim.HasProperty("physxArticulation:articulationEnabled"):
                 art_b_prim.GetProperty("physxArticulation:articulationEnabled").Set(
                     False
@@ -140,8 +145,9 @@ class RobotAssembler(__RobotAssembler):
         stage = get_current_stage()
 
         fixed_joint_path = prim_path + "/AssemblerFixedJoint"
+        stage = sim_utils.get_current_stage()
         fixed_joint_path = find_unique_string_name(
-            fixed_joint_path, lambda x: not is_prim_path_valid(x)
+            fixed_joint_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
         )
         fixed_joint = UsdPhysics.FixedJoint.Define(stage, fixed_joint_path)  # type: ignore
 

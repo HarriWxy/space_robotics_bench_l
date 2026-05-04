@@ -178,7 +178,17 @@ def last_dir(directory: Path, modification_time: bool = False) -> Path | None:
 
 
 def last_file(directory: Path, modification_time: bool = False) -> Path | None:
-    assert directory.is_dir()
+    try:
+        assert directory.is_dir()
+    except AssertionError:
+        if directory.parent.is_dir():
+            os.mkdir(directory)
+            return None
+        else:
+            raise ValueError(
+                f"Path {directory} is expected to be a directory but it is a file, and its parent {directory.parent} is not a directory."
+            )
+        
     if files := sorted(
         filter(
             lambda p: p.is_file(),

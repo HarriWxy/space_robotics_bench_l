@@ -64,8 +64,8 @@ class UnitreeH1(Humanoid):
                     ".*_knee",
                     "torso",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                effort_limit_sim=300.0,
+                velocity_limit_sim=100.0,
                 stiffness={
                     ".*_hip_yaw": 150.0,
                     ".*_hip_roll": 150.0,
@@ -83,8 +83,8 @@ class UnitreeH1(Humanoid):
             ),
             "feet": ImplicitActuatorCfg(
                 joint_names_expr=[".*_ankle"],
-                effort_limit=100.0,
-                velocity_limit=100.0,
+                effort_limit_sim=100.0,
+                velocity_limit_sim=100.0,
                 stiffness={".*_ankle": 20.0},
                 damping={".*_ankle": 4.0},
             ),
@@ -95,8 +95,8 @@ class UnitreeH1(Humanoid):
                     ".*_shoulder_yaw",
                     ".*_elbow",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                effort_limit_sim=300.0,
+                velocity_limit_sim=100.0,
                 stiffness={
                     ".*_shoulder_pitch": 40.0,
                     ".*_shoulder_roll": 40.0,
@@ -183,8 +183,8 @@ class UnitreeG1(Humanoid):
                     ".*_knee_joint",
                     "torso_joint",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                effort_limit_sim=300.0,
+                velocity_limit_sim=100.0,
                 stiffness={
                     ".*_hip_yaw_joint": 150.0,
                     ".*_hip_roll_joint": 150.0,
@@ -206,7 +206,7 @@ class UnitreeG1(Humanoid):
                 },
             ),
             "feet": ImplicitActuatorCfg(
-                effort_limit=20.0,
+                effort_limit_sim=20.0,
                 joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
                 stiffness=20.0,
                 damping=2.0,
@@ -227,8 +227,8 @@ class UnitreeG1(Humanoid):
                     ".*_one_joint",
                     ".*_two_joint",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                effort_limit_sim=300.0,
+                velocity_limit_sim=100.0,
                 stiffness=40.0,
                 damping=10.0,
                 armature={

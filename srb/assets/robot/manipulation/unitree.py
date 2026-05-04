@@ -49,8 +49,8 @@ class UnitreeZ1(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),

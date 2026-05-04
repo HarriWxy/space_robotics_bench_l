@@ -10,6 +10,7 @@ from srb.core.sim import (
     CollisionPropertiesCfg,
     RigidBodyPropertiesCfg,
     UsdFileCfg,
+    MeshCollisionPropertiesCfg,
 )
 from srb.utils.math import rpy_to_quat
 from srb.utils.path import SRB_ASSETS_DIR_SRB_ROBOT
@@ -36,6 +37,7 @@ class RobotiqHandE(ActiveTool):
                 solver_position_iteration_count=8,
                 solver_velocity_iteration_count=0,
             ),
+            mesh_collision_props=MeshCollisionPropertiesCfg(mesh_approximation="convexDecomposition"),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={
@@ -45,8 +47,8 @@ class RobotiqHandE(ActiveTool):
         actuators={
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["Slider_[1-2]"],
-                velocity_limit=4.0,
-                effort_limit=20.0,
+                velocity_limit_sim=4.0,
+                effort_limit_sim=20.0,
                 stiffness=400.0,
                 damping=50.0,
             ),

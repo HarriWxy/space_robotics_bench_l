@@ -55,8 +55,8 @@ class AnymalC(LeggedRobot):
             # "legs": DCMotorCfg(
             #     joint_names_expr=[".*HAA", ".*HFE", ".*KFE"],
             #     saturation_effort=120.0,
-            #     effort_limit=80.0,
-            #     velocity_limit=7.5,
+            #     effort_limit_sim=80.0,
+            #     velocity_limit_sim=7.5,
             #     stiffness={".*": 40.0},
             #     damping={".*": 5.0},
             # ),
@@ -64,8 +64,8 @@ class AnymalC(LeggedRobot):
                 joint_names_expr=[".*HAA", ".*HFE", ".*KFE"],
                 network_file=f"{ISAACLAB_NUCLEUS_DIR}/ActuatorNets/ANYbotics/anydrive_3_lstm_jit.pt",
                 saturation_effort=120.0,
-                effort_limit=80.0,
-                velocity_limit=7.5,
+                effort_limit_sim=80.0,
+                velocity_limit_sim=7.5,
             ),
         },
     )
@@ -144,8 +144,8 @@ class AnymalD(LeggedRobot):
             # "legs": DCMotorCfg(
             #     joint_names_expr=[".*HAA", ".*HFE", ".*KFE"],
             #     saturation_effort=120.0,
-            #     effort_limit=80.0,
-            #     velocity_limit=7.5,
+            #     effort_limit_sim=80.0,
+            #     velocity_limit_sim=7.5,
             #     stiffness={".*": 40.0},
             #     damping={".*": 5.0},
             # ),
@@ -153,8 +153,8 @@ class AnymalD(LeggedRobot):
                 joint_names_expr=[".*HAA", ".*HFE", ".*KFE"],
                 network_file=f"{ISAACLAB_NUCLEUS_DIR}/ActuatorNets/ANYbotics/anydrive_3_lstm_jit.pt",
                 saturation_effort=120.0,
-                effort_limit=80.0,
-                velocity_limit=7.5,
+                effort_limit_sim=80.0,
+                velocity_limit_sim=7.5,
             ),
         },
     )

@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 import isaacsim.core.utils.prims as prim_utils
+import isaaclab.sim as sim_utils
 from isaaclab.sim import bind_physics_material, bind_visual_material, clone
 from pxr import Usd
 
@@ -17,7 +18,8 @@ def spawn_arrow(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    if prim_utils.is_prim_path_valid(prim_path):
+    stage = sim_utils.get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(
@@ -89,7 +91,8 @@ def spawn_pinned_arrow(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    if prim_utils.is_prim_path_valid(prim_path):
+    stage = sim_utils.get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(
@@ -175,7 +178,8 @@ def spawn_pinned_sphere(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    if prim_utils.is_prim_path_valid(prim_path):
+    stage = sim_utils.get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)    
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(

@@ -282,10 +282,11 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 for obs_key in self._obs_history_buffer[obs_cat]:
                     self._obs_history_buffer[obs_cat][obs_key][:, env_ids] = 0.0
 
-        super()._reset_idx(env_ids)
-
         # Move assembled bodies to the correct position to avoid physics snapping them in place
         self._update_assembly_fixed_joint_transforms(env_ids)
+        
+        super()._reset_idx(env_ids)
+
 
     def _pre_physics_step(self, actions: torch.Tensor):
         if self.cfg.actions:

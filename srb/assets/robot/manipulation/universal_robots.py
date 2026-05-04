@@ -61,8 +61,8 @@ class UR3(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -204,8 +204,8 @@ class UR3e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -347,8 +347,8 @@ class UR5(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -490,8 +490,8 @@ class UR5e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -669,8 +669,8 @@ class UR10(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -815,8 +815,8 @@ class UR10e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -958,8 +958,8 @@ class UR16e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1101,8 +1101,8 @@ class UR20(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1244,8 +1244,8 @@ class UR30(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                velocity_limit_sim=100.0,
+                effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),

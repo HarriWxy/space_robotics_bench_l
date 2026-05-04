@@ -101,7 +101,7 @@ class BaseEnvCfg:
         dt=MISSING,  # type: ignore
         render_interval=MISSING,  # type: ignore
         gravity=MISSING,  # type: ignore
-        device="cpu",  # Note: Changed to GPU in __main__.py because initializing with CPU improves compatibility
+        device="cuda",  # cpu    Note: Changed to GPU in __main__.py because initializing with CPU improves compatibility
         physx=PhysxCfg(
             min_position_iteration_count=2,
             min_velocity_iteration_count=1,
@@ -859,8 +859,6 @@ class BaseEnvCfg:
             if isinstance(asset_cfg, DeformableObjectCfg):
                 self.sim.device = "cuda"
                 break
-        else:
-            self.sim.device = "cpu"
 
     def _setup_asset_extras(self):
         def _recursive_impl(attr: Any):
