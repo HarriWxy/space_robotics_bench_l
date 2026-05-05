@@ -15,19 +15,22 @@ def run_srb(argv):
 if __name__ == "__main__":
     run_srb([
         "agent",
-        "eval", #
-        # "train",
+        # "eval", #
+        "train",
         "--algo",
         "sbx_ppo",
         "--env",
-        "landing",
+        "sample_collection",
+        "env.domain=moon",
+        "env.sample=moon_rock",
         # "env.scenery=ground_plane",
         # "env.debug_vis=true",
         "env.num_envs=128", # 
+        "env.sim.device=cuda",
         # "--model=./logs/landing/sbx_ppo/20260414T103257/ckpt/srb-landing.zip",
-        "env.robot=apollo_lander",
-        # "--headless",
-        # "--continue_training",
+        "env.robot=ur5+robotiq_hand_e",
+        "--headless",
+        "--continue_training",
     ])
 
 

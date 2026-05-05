@@ -247,7 +247,7 @@ class Task(ManipulationEnv):
         return super()._pre_physics_step(modified_actions)
 
 
-@torch.jit.script
+# @torch.jit.script
 def _compute_step_return(
     *,
     ## Time
@@ -391,7 +391,7 @@ def _compute_step_return(
     WEIGHT_JOINT_TORQUE
     * torch.sum(torch.square(joint_torque_clipped), dim=1),
     min=MAX_JOINT_TORQUE_PENALTY,
-)
+    )
 
     # Penalty: Joint acceleration
     WEIGHT_JOINT_ACCELERATION = -0.0005
@@ -400,7 +400,7 @@ def _compute_step_return(
     penalty_joint_acceleration = torch.clamp_min(
     WEIGHT_JOINT_ACCELERATION * torch.sum(torch.square(joint_acc_clipped), dim=1),
     min=MAX_JOINT_ACCELERATION_PENALTY,
-)
+    ) # 加速度惩罚项,
 
     # Penalty: Undesired robot contacts
     WEIGHT_UNDESIRED_ROBOT_CONTACTS = -1.0
@@ -424,7 +424,7 @@ def _compute_step_return(
         .expand(num_envs, 3),
         dim=1,
     )
-    top_down_alignment = torch.nan_to_num(top_down_alignment, 0.0, 1.0, -1.0)
+    top_down_alignment = torch.nan_to_num(top_down_alignment, 0.0, 1.0, -1.0)  # 处理 NaN 和 inf，确保在 [-1, 1] 范围内
     reward_top_down_orientation = WEIGHT_TOP_DOWN_ORIENTATION * (
         1.0 - torch.tanh((1.0 - top_down_alignment) / TANH_STD_TOP_DOWN_ORIENTATION)
     )
@@ -439,7 +439,7 @@ def _compute_step_return(
         - torch.tanh(
             dist_ee_obj / TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ
         )
-    )
+    ) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
     WEIGHT_GRASP = 4.0
@@ -464,18 +464,11 @@ def _compute_step_return(
     HEIGHT_OFFSET_LIFT = 0.15
     HEIGHT_SPAN_LIFT = 0.1
     TANH_STD_HEIGHT_LIFT = 0.05
-    reward_lift = WEIGHT_LIFT * (
-        1.0
-        - torch.tanh(
-            (
-                torch.abs(
-                    tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT
-                )
-                - HEIGHT_SPAN_LIFT
-            ).clamp(min=0.0)
-            / TANH_STD_HEIGHT_LIFT
-        )
-    )
+    dfasfte = torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
+    g = torch.tanh((dfasfte - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT)
+    reward_lift = WEIGHT_LIFT * (1.0 - torch.tanh((
+            torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
+              - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT))
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
@@ -495,7 +488,7 @@ def _compute_step_return(
         )
     )
 
-        # ========== 新增惩罚项 ==========
+    # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
     if act_current.size(1) > 6:
         gripper_action = act_current[:, -1]

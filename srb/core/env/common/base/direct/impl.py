@@ -133,6 +133,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
         else:
             self._obs_history_buffer: Dict[str, Dict[str, torch.Tensor]] | None = None
 
+        # Author joint assemblies only after the simulator has been initialized and
+        # the first scene reset has populated the asset poses.
+        self._setup_joint_assemblies()
+
     def close(self):
         if not self._is_closed:
             if self.cfg.actions:
@@ -282,11 +286,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 for obs_key in self._obs_history_buffer[obs_cat]:
                     self._obs_history_buffer[obs_cat][obs_key][:, env_ids] = 0.0
 
-        # Move assembled bodies to the correct position to avoid physics snapping them in place
-        self._update_assembly_fixed_joint_transforms(env_ids)
-        
         super()._reset_idx(env_ids)
 
+        # Move assembled bodies to the correct position to avoid physics snapping them in place
+        self._update_assembly_fixed_joint_transforms(env_ids)
 
     def _pre_physics_step(self, actions: torch.Tensor):
         if self.cfg.actions:
@@ -461,7 +464,7 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
     def _setup_scene(self):
         super()._setup_scene()
 
-        ## Handle assemblies
+    def _setup_joint_assemblies(self):
         self.joint_assemblies: Dict[str, Sequence[AssembledBodies]] = {}
         for key, assembly_cfg in self.cfg.joint_assemblies.items():
             self.joint_assemblies[key] = tuple(
@@ -479,6 +482,9 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 )
                 for i in range(self.num_envs)
             )
+
+        if self.joint_assemblies:
+            self._update_assembly_fixed_joint_transforms(torch.arange(0,self.num_envs, device=self.device))
 
     def _update_assembly_fixed_joint_transforms(self, env_ids: Sequence[int]):
         for key, assembly_cfg in self.cfg.joint_assemblies.items():
