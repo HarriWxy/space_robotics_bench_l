@@ -64,6 +64,7 @@ def terrain_surface_heights(
     footprint_radius: float = _FOOTPRINT_RADIUS,
     ray_start_height: float = _RAY_START_HEIGHT,
 ) -> torch.Tensor:
+    '计算地形表面高度'
     from isaaclab.utils.warp import raycast_mesh
 
     if positions_w.ndim != 2 or positions_w.shape[-1] != 3:
