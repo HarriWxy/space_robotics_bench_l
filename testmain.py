@@ -18,7 +18,7 @@ if __name__ == "__main__":
         # "eval", #
         "train",
         "--algo",
-        "sbx_ppo",
+        "sbx_sac",
         "--env",
         "sample_collection",
         "env.domain=moon",
@@ -27,7 +27,7 @@ if __name__ == "__main__":
         # "env.debug_vis=true",
         "env.num_envs=256", # 
         "env.sim.device=cuda",
-        # "--model=./logs/landing/sbx_ppo/20260414T103257/ckpt/srb-landing.zip",
+        # "--model=./logs/landing/sbx_sac/20260414T103257/ckpt/srb-landing.zip",
         "env.robot=ur5+robotiq_hand_e",
         "--headless",
         # "--continue_training",
