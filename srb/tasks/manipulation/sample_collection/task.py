@@ -381,7 +381,7 @@ def _compute_step_return(
     WEIGHT_ACTION_RATE = -0.5
     penalty_action_rate = WEIGHT_ACTION_RATE * torch.mean(
         torch.square(act_current - act_previous), dim=1
-    )
+    ) # 惩罚动作变化率，鼓励平滑动作输出
 
     # Penalty: Joint torque
     WEIGHT_JOINT_TORQUE = -0.000025
@@ -391,7 +391,7 @@ def _compute_step_return(
         WEIGHT_JOINT_TORQUE
         * torch.sum(torch.square(joint_applied_torque_robot), dim=1),
         min=MAX_JOINT_TORQUE_PENALTY,
-    )
+    ) # 加大关节扭矩惩罚权重，并设置最大惩罚值，鼓励更节能的动作
 
     # Penalty: Joint acceleration
     WEIGHT_JOINT_ACCELERATION = -0.0005
@@ -407,14 +407,14 @@ def _compute_step_return(
     penalty_undesired_robot_contacts = WEIGHT_UNDESIRED_ROBOT_CONTACTS * (
         torch.max(torch.norm(contact_forces_robot, dim=-1), dim=1)[0]
         > THRESHOLD_UNDESIRED_ROBOT_CONTACTS
-    )
+    ) # 惩罚机器人与环境的过大接触力，鼓励更轻柔的操作
 
     # Penalty: Time (鼓励快速完成任务)
     WEIGHT_TIME_PENALTY = -0.005
     penalty_time = WEIGHT_TIME_PENALTY * torch.ones(num_envs, dtype=dtype, device=device)
 
     # Reward: End-effector top-down orientation
-    WEIGHT_TOP_DOWN_ORIENTATION = 1.0
+    WEIGHT_TOP_DOWN_ORIENTATION = 1.0 / 2
     TANH_STD_TOP_DOWN_ORIENTATION = 0.15
     top_down_alignment = torch.sum(
         fk_rotmat_end_effector[:, :, 2] * torch.tensor((0.0, 0.0, -1.0), device=device)
@@ -423,10 +423,10 @@ def _compute_step_return(
     # top_down_alignment = torch.nan_to_num(top_down_alignment, 0.0, 1.0, -1.0)  # 处理 NaN 和 inf，确保在 [-1, 1] 范围内
     reward_top_down_orientation = WEIGHT_TOP_DOWN_ORIENTATION * (
         1.0 - torch.tanh((1.0 - top_down_alignment) / TANH_STD_TOP_DOWN_ORIENTATION)
-    )
+    ) # 鼓励末端执行器保持向下的姿态，便于抓取物体
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 2
     TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
     # dist_ee_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
@@ -437,7 +437,7 @@ def _compute_step_return(
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0
+    WEIGHT_GRASP = 4.0 *2
     THRESHOLD_GRASP = 2.5
     reward_grasp = (
         WEIGHT_GRASP * ( 
@@ -446,7 +446,7 @@ def _compute_step_return(
         )
         if contact_force_matrix_end_effector is not None
         else torch.zeros(num_envs, dtype=dtype, device=device)
-    )
+    ) # 鼓励成功抓取物体，基于末端执行器的接触力矩阵中最大接触力的平均值是否超过阈值
 
     # Reward: Lift object
     WEIGHT_LIFT = 10.0
