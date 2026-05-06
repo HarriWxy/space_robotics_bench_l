@@ -71,7 +71,7 @@ class TaskCfg(ManipulationEnvCfg):
     events: EventCfg = EventCfg()
 
     ## Time
-    episode_length_s: float = 7.5
+    episode_length_s: float = 15 # 7.5
     is_finite_horizon: bool = True
 
     ## Target
@@ -247,7 +247,7 @@ class Task(ManipulationEnv):
         return super()._pre_physics_step(modified_actions)
 
 
-# @torch.jit.script
+@torch.jit.script
 def _compute_step_return(
     *,
     ## Time
@@ -269,7 +269,7 @@ def _compute_step_return(
     fk_pos_end_effector: torch.Tensor,
     fk_quat_end_effector: torch.Tensor,
     # Transforms (world frame)
-    tf_pos_end_effector: torch.Tensor,
+    tf_pos_end_effector: torch.Tensor, # 末端执行器在世界坐标系中的位置
     tf_quat_end_effector: torch.Tensor,
     tf_pos_obj_initial: torch.Tensor,
     tf_pos_obj: torch.Tensor,
@@ -291,7 +291,7 @@ def _compute_step_return(
         joint_pos_end_effector = torch.nan_to_num(joint_pos_end_effector, nan=0.0, posinf=0.0, neginf=0.0)
     joint_acc_robot = torch.nan_to_num(joint_acc_robot, nan=0.0, posinf=0.0, neginf=0.0)
     joint_applied_torque_robot = torch.nan_to_num(joint_applied_torque_robot, nan=0.0, posinf=0.0, neginf=0.0)
-    fk_pos_end_effector = torch.nan_to_num(fk_pos_end_effector, nan=0.0, posinf=0.0, neginf=0.0)
+    fk_pos_end_effector = torch.nan_to_num(fk_pos_end_effector, nan=0.0, posinf=0.0, neginf=0.0) 
     fk_quat_end_effector = torch.nan_to_num(fk_quat_end_effector, nan=0.0, posinf=0.0, neginf=0.0)
     tf_pos_end_effector = torch.nan_to_num(tf_pos_end_effector, nan=0.0, posinf=0.0, neginf=0.0)
     tf_quat_end_effector = torch.nan_to_num(tf_quat_end_effector, nan=0.0, posinf=0.0, neginf=0.0)
@@ -445,35 +445,32 @@ def _compute_step_return(
     WEIGHT_GRASP = 4.0
     THRESHOLD_GRASP = 2.0
     reward_grasp = (
-        WEIGHT_GRASP
-        * (
-            torch.mean(
-                torch.max(
-                    torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1
-                )[0],
-                dim=1,
-            )
-            > THRESHOLD_GRASP
+        WEIGHT_GRASP * ( 
+            torch.mean(torch.max(torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1)[0],
+                dim=1,)  > THRESHOLD_GRASP
         )
         if contact_force_matrix_end_effector is not None
         else torch.zeros(num_envs, dtype=dtype, device=device)
     )
 
     # Reward: Lift object
-    WEIGHT_LIFT = 12.0
+    WEIGHT_LIFT = 10.0
     HEIGHT_OFFSET_LIFT = 0.15
     HEIGHT_SPAN_LIFT = 0.1
-    TANH_STD_HEIGHT_LIFT = 0.05
-    dfasfte = torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
-    g = torch.tanh((dfasfte - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT)
-    reward_lift = WEIGHT_LIFT * (1.0 - torch.tanh((
+    TANH_STD_HEIGHT_LIFT = 0.02
+    reward_lift = WEIGHT_LIFT * (1.0 - torch.tanh(
             torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
-              - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT))
+             / TANH_STD_HEIGHT_LIFT))
+    # 计算 实际升高高度与目标高度的差 dfasfte = |(当前高度 - 初始高度) - 期望升高高度| 小于 HHEIGHT_SPAN_LIFT 时应该少给奖励
+    # WEIGHT_LIFT * (1.0 - torch.tanh((
+    #         torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
+    #           - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT))
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
     LIFT_HEIGHT_SUCCESS = 0.15           # 提起 15 cm 即视为成功 (原提升门槛是 0.5 米，太高)
-    success = (tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS
+    success = torch.norm(tf_pos_obj-tf_pos_end_effector, dim=-1) < 0.1  # 末端执行器接近物体
+    success = success & ((tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS)
     reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
 
     # Reward: Distance | Object <--> Target

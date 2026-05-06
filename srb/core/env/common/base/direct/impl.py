@@ -259,6 +259,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 info=step_return.info,
             )
 
+        successsum = torch.sum(step_return.observation["state"]["success"])
+        if successsum > 0:
+            print("success sum: ", successsum.item(),end="")
+
         return step_return
 
     def _reset_idx(self, env_ids: Sequence[int]):

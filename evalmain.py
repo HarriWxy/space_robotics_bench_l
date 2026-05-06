@@ -15,8 +15,8 @@ def run_srb(argv):
 if __name__ == "__main__":
     run_srb([
         "agent",
-        # "eval", #
-        "train",
+        "eval", #
+        # "train",
         "--algo",
         "sbx_ppo",
         "--env",
@@ -25,11 +25,11 @@ if __name__ == "__main__":
         "env.sample=moon_rock",
         # "env.scenery=ground_plane",
         # "env.debug_vis=true",
-        "env.num_envs=256", # 
+        "env.num_envs=1", # 
         "env.sim.device=cuda",
         # "--model=./logs/landing/sbx_ppo/20260414T103257/ckpt/srb-landing.zip",
         "env.robot=ur5+robotiq_hand_e",
-        "--headless",
+        # "--headless",
         # "--continue_training",
     ])
 
