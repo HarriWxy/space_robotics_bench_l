@@ -437,7 +437,7 @@ def _compute_step_return(
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0 *2
+    WEIGHT_GRASP = 4.0 * 2
     THRESHOLD_GRASP = 2.5
     reward_grasp = (
         WEIGHT_GRASP * ( 
@@ -463,7 +463,7 @@ def _compute_step_return(
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
-    LIFT_HEIGHT_SUCCESS = 0.15           # 提起 15 cm 即视为成功 (原提升门槛是 0.5 米，太高)
+    LIFT_HEIGHT_SUCCESS = 0.35           # 提起 35 cm 即视为成功 (原提升门槛是 0.5 米，太高)
     
     success = distance_to_obj < 0.1  # 末端执行器接近物体
     success = success & ((tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS)
