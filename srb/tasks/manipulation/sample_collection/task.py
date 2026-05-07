@@ -202,52 +202,52 @@ class Task(ManipulationEnv):
             else None,
         )
 
-    def _is_gripper_closed(self) -> torch.Tensor:
-        """返回夹爪是否闭合的布尔张量（基于关节位置或动作）"""
-        # 假设夹爪关节名称为 "Slider_[1-2]"，闭合位置为 -0.025
-        if hasattr(self._end_effector, 'data') and self._end_effector.data is not None:
-            joint_pos = self._end_effector.data.joint_pos
-            # 取平均值作为闭合程度
-            gripper_closed = joint_pos.mean(dim=1) < -0.02
-            return gripper_closed
-        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+    # def _is_gripper_closed(self) -> torch.Tensor:
+    #     """返回夹爪是否闭合的布尔张量（基于关节位置或动作）"""
+    #     # 假设夹爪关节名称为 "Slider_[1-2]"，闭合位置为 -0.025
+    #     if hasattr(self._end_effector, 'data') and self._end_effector.data is not None:
+    #         joint_pos = self._end_effector.data.joint_pos
+    #         # 取平均值作为闭合程度
+    #         gripper_closed = joint_pos.mean(dim=1) < -0.02
+    #         return gripper_closed
+    #     return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
-    def _pre_physics_step(self, actions: torch.Tensor) -> torch.Tensor:
-        # 假设动作空间的结构：[arm_actions (6维), gripper_action (1维)]
-        # 如果使用 InverseKinematics，前6维是末端位姿增量，最后一维是夹爪
-        arm_actions = actions[:, :-1]
-        gripper_action = actions[:, -1]
+    # def _pre_physics_step(self, actions: torch.Tensor) -> torch.Tensor:
+    #     # 假设动作空间的结构：[arm_actions (6维), gripper_action (1维)]
+    #     # 如果使用 InverseKinematics，前6维是末端位姿增量，最后一维是夹爪
+    #     arm_actions = actions[:, :-1]
+    #     gripper_action = actions[:, -1]
 
-        # 获取末端执行器到物体的距离（已在 extract_step_return 中计算，但这里需要实时获取）
-        # 最简单的方式：从当前观测中提取距离。但在此方法中，可以访问 self._obj 和 self._tf_end_effector
-        if hasattr(self, '_obj') and hasattr(self, '_tf_end_effector'):
-            ee_pos = self._tf_end_effector.data.target_pos_w[:, 0, :]  # (num_envs, 3)
-            obj_pos = self._obj.data.root_com_pos_w
-            distance_to_obj = torch.norm(ee_pos - obj_pos, dim=1)
-            # 也可以检查接触力
-            if self._contacts_end_effector is not None:
-                contact_force = self._contacts_end_effector.data.force_matrix_w
-                contact_exist = torch.norm(contact_force, dim=-1).max(dim=1)[0] > 0.1
-            else:
-                contact_exist = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        else:
-            distance_to_obj = torch.full((self.num_envs,), 1.0, device=self.device)
-            contact_exist = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+    #     # 获取末端执行器到物体的距离（已在 extract_step_return 中计算，但这里需要实时获取）
+    #     # 最简单的方式：从当前观测中提取距离。但在此方法中，可以访问 self._obj 和 self._tf_end_effector
+    #     if hasattr(self, '_obj') and hasattr(self, '_tf_end_effector'):
+    #         ee_pos = self._tf_end_effector.data.target_pos_w[:, 0, :]  # (num_envs, 3)
+    #         obj_pos = self._obj.data.root_com_pos_w
+    #         distance_to_obj = torch.norm(ee_pos - obj_pos, dim=1)
+    #         # 也可以检查接触力
+    #         if self._contacts_end_effector is not None:
+    #             contact_force = self._contacts_end_effector.data.force_matrix_w
+    #             contact_exist = torch.norm(contact_force, dim=-1).max(dim=1)[0] > 0.1
+    #         else:
+    #             contact_exist = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+    #     else:
+    #         distance_to_obj = torch.full((self.num_envs,), 1.0, device=self.device)
+    #         contact_exist = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
-        # 只有距离小于阈值（例如 0.05 米）或有接触时，才允许闭合动作；否则强制设为打开（0.0）
-        ALLOW_CLOSE_DISTANCE = 0.05
-        allow_close = (distance_to_obj < ALLOW_CLOSE_DISTANCE) | contact_exist
-        # 注意：夹爪闭合通常对应负值（例如 -0.025），打开为 0.0
-        # 如果动作是二进制的（0/1），则闭合为 1，打开为 0，需相应调整。
-        # 这里假设闭合为负，张开为 0。
-        gripper_action = torch.where(allow_close, gripper_action, torch.zeros_like(gripper_action))
+    #     # 只有距离小于阈值（例如 0.05 米）或有接触时，才允许闭合动作；否则强制设为打开（0.0）
+    #     ALLOW_CLOSE_DISTANCE = 0.05
+    #     allow_close = (distance_to_obj < ALLOW_CLOSE_DISTANCE) | contact_exist
+    #     # 注意：夹爪闭合通常对应负值（例如 -0.025），打开为 0.0
+    #     # 如果动作是二进制的（0/1），则闭合为 1，打开为 0，需相应调整。
+    #     # 这里假设闭合为负，张开为 0。
+    #     gripper_action = torch.where(allow_close, gripper_action, torch.zeros_like(gripper_action))
 
-        # 重新组合动作
-        modified_actions = torch.cat([arm_actions, gripper_action.unsqueeze(1)], dim=1)
-        return super()._pre_physics_step(modified_actions)
+    #     # 重新组合动作
+    #     modified_actions = torch.cat([arm_actions, gripper_action.unsqueeze(1)], dim=1)
+    #     return super()._pre_physics_step(modified_actions)
 
 
-# @torch.jit.script
+@torch.jit.script
 def _compute_step_return(
     *,
     ## Time
@@ -449,23 +449,26 @@ def _compute_step_return(
     ) # 鼓励成功抓取物体，基于末端执行器的接触力矩阵中最大接触力的平均值是否超过阈值
 
     # Reward: Lift object
-    WEIGHT_LIFT = 10.0
-    HEIGHT_OFFSET_LIFT = 0.15
-    HEIGHT_SPAN_LIFT = 0.1
-    TANH_STD_HEIGHT_LIFT = 0.02
-    reward_lift = WEIGHT_LIFT * (1.0 - torch.tanh(
-            torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
-             / TANH_STD_HEIGHT_LIFT))
-    # 计算 实际升高高度与目标高度的差 dfasfte = |(当前高度 - 初始高度) - 期望升高高度| 小于 HHEIGHT_SPAN_LIFT 时应该少给奖励
-    # WEIGHT_LIFT * (1.0 - torch.tanh((
-    #         torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
-    #           - HEIGHT_SPAN_LIFT).clamp(min=0.0) / TANH_STD_HEIGHT_LIFT))
+    WEIGHT_LIFT = 4.0
+    HEIGHT_OFFSET_LIFT = 0.25
+    HEIGHT_SPAN_LIFT = 0.10
+    TANH_STD_HEIGHT_LIFT = 0.05
+    reward_lift = WEIGHT_LIFT * (
+        1.0
+        - torch.tanh(
+            (
+                torch.abs(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2] - HEIGHT_OFFSET_LIFT)
+                - HEIGHT_SPAN_LIFT
+            ).clamp(min=0.0)
+            / TANH_STD_HEIGHT_LIFT
+        )
+    )
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
     LIFT_HEIGHT_SUCCESS = 0.35           # 提起 35 cm 即视为成功 (原提升门槛是 0.5 米，太高)
     
-    success = distance_to_obj < 0.1  # 末端执行器接近物体
+    success = reward_grasp > 0.0  # 已经抓住物体
     success = success & ((tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS)
     reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
 
