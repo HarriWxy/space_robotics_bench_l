@@ -18,6 +18,8 @@ from stable_baselines3.common.vec_env import (
     is_vecenv_wrapped,
 )
 
+from srb.integrations.sb3.callbacks import RewardTermsTensorboardCallback
+
 if TYPE_CHECKING:
     from srb._typing import AnyEnv
 
@@ -100,3 +102,9 @@ class ExperimentManager(__ExperimentManager):
                 env = VecTransposeImage(env)
 
         return env
+
+    def create_callbacks(self):
+        super().create_callbacks()
+
+        if self.tensorboard_log:
+            self.callbacks.append(RewardTermsTensorboardCallback())

@@ -237,6 +237,8 @@ class Sb3EnvWrapper(VecEnv):
                     if infos[idx]["episode"] is not None:
                         for sub_key, sub_value in value.items():
                             infos[idx]["episode"][sub_key] = sub_value
+                elif key == "reward_terms" and isinstance(value, dict):
+                    infos[idx][key] = self._extract_reward_terms(value, idx)
                 else:
                     infos[idx][key] = value[idx]
             # Add information about terminal observation separately
@@ -282,4 +284,30 @@ class Sb3EnvWrapper(VecEnv):
                 terminal_obs = obs[idx]
             infos[idx]["terminal_observation"] = terminal_obs
 
+        reward_terms = extras.get("reward_terms")
+        if isinstance(reward_terms, dict):
+            for idx in range(self.num_envs):
+                infos[idx]["reward_terms"] = self._extract_reward_terms(
+                    reward_terms,
+                    idx,
+                )
+
         return infos
+
+    @staticmethod
+    def _extract_reward_terms(
+        reward_terms: Dict[str, Any],
+        idx: int,
+    ) -> Dict[str, float]:
+        extracted_reward_terms: Dict[str, float] = {}
+        for reward_term, value in reward_terms.items():
+            if isinstance(value, torch.Tensor):
+                extracted_reward_terms[reward_term] = float(
+                    value[idx].detach().cpu().item()
+                )
+            elif isinstance(value, numpy.ndarray):
+                extracted_reward_terms[reward_term] = float(value[idx])
+            else:
+                extracted_reward_terms[reward_term] = float(value)
+
+        return extracted_reward_terms
