@@ -20,7 +20,7 @@ tfd = tfp.distributions
 
 class ResidualBlock(nn.Module):
     hidden_dim: int
-    activation_fn: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
+    activation_fn: Callable[[jnp.ndarray], jnp.ndarray] = nn.elu
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -28,7 +28,7 @@ class ResidualBlock(nn.Module):
         if residual.shape[-1] != self.hidden_dim:
             residual = nn.Dense(self.hidden_dim)(residual)
 
-        x = nn.LayerNorm()(x)
+        # x = nn.LayerNorm()(x)
         x = nn.Dense(self.hidden_dim)(x)
         x = self.activation_fn(x)
         x = nn.Dense(self.hidden_dim)(x)
