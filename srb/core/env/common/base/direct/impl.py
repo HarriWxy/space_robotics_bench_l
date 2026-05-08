@@ -47,6 +47,7 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
             self.scene["scenery"] if self.cfg.scenery is not None else None
         )
         self._robot: Articulation = self.scene["robot"]
+        self.cfg.extras = True
 
     def __post_init__(self):
         if self._use_step_return_workflow:
