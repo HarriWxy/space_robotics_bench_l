@@ -453,7 +453,7 @@ def _compute_step_return(
     HEIGHT_OFFSET_LIFT = 0.25
     HEIGHT_SPAN_LIFT = 0.10
     TANH_STD_HEIGHT_LIFT = 0.05
-    reward_lift = WEIGHT_LIFT * (
+    reward_lift = success * WEIGHT_LIFT * (
         1.0
         - torch.tanh(
             (
