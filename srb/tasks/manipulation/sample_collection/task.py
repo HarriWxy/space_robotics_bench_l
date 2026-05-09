@@ -448,6 +448,15 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=dtype, device=device)
     ) # 鼓励成功抓取物体，基于末端执行器的接触力矩阵中最大接触力的平均值是否超过阈值
 
+    # ========== 稀疏成功奖励（新增） ==========
+    WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
+    LIFT_HEIGHT_SUCCESS = 0.35           # 提起 35 cm 即视为成功 (原提升门槛是 0.5 米，太高)
+    
+    success = reward_grasp > 0.0  # 已经抓住物体
+    success = success & ((tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS)
+    reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
+
+
     # Reward: Lift object
     WEIGHT_LIFT = 4.0
     HEIGHT_OFFSET_LIFT = 0.25
@@ -464,13 +473,6 @@ def _compute_step_return(
         )
     )
 
-    # ========== 稀疏成功奖励（新增） ==========
-    WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
-    LIFT_HEIGHT_SUCCESS = 0.35           # 提起 35 cm 即视为成功 (原提升门槛是 0.5 米，太高)
-    
-    success = reward_grasp > 0.0  # 已经抓住物体
-    success = success & ((tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2]) > LIFT_HEIGHT_SUCCESS)
-    reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
 
     # Reward: Distance | Object <--> Target
     WEIGHT_DISTANCE_OBJ_TO_TARGET = 32.0
