@@ -74,6 +74,9 @@ class TaskCfg(ManipulationEnvCfg):
     episode_length_s: float = 15 # 7.5
     is_finite_horizon: bool = True
 
+    ## Curriculum
+    stage: int = 1
+
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.5, 0.0, 0.75)
     tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
@@ -151,12 +154,19 @@ class Task(ManipulationEnv):
         self._robot.data.applied_torque[env_ids] = 0.0
         self._robot.data.joint_vel[env_ids] = 0.0
 
+    def _pre_physics_step(self, actions: torch.Tensor) -> None:
+        if self.cfg.stage <= 1 and actions.size(1) > 6:
+            actions = actions.clone()
+            actions[:, -1] = 0.0
+        super()._pre_physics_step(actions)
+
     def extract_step_return(self) -> StepReturn:
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
             truncate_episodes=self.cfg.truncate_episodes,
+            stage=self.cfg.stage,
             ## Actions
             act_current=self.action_manager.action,
             act_previous=self.action_manager.prev_action,
@@ -254,6 +264,7 @@ def _compute_step_return(
     episode_length: torch.Tensor,
     max_episode_length: int,
     truncate_episodes: bool,
+    stage: int,
     ## Actions
     act_current: torch.Tensor,
     act_previous: torch.Tensor,
@@ -477,7 +488,7 @@ def _compute_step_return(
     TANH_STD_DISTANCE_OBJ_TO_TARGET = 0.2
     # dist_obj_target = torch.norm(tf_pos_obj_to_target, dim=-1)
     # dist_obj_target = torch.clamp(dist_obj_target, 0.0, 10.0)
-    reward_distance_obj_to_target = WEIGHT_DISTANCE_OBJ_TO_TARGET * (
+    reward_distance_obj_to_target = WEIGHT_DISTANCE_OBJ_TO_TARGET * (  # 奖励物体接近目标位置？
         1.0 - torch.tanh(
             torch.norm(tf_pos_obj_to_target, dim=-1) / TANH_STD_DISTANCE_OBJ_TO_TARGET
         )
@@ -507,6 +518,15 @@ def _compute_step_return(
         bad_grasp = torch.zeros(num_envs, dtype=torch.bool, device=device)
     fake_grasp_penalty_weight = -0.5
     fake_grasp_penalty = fake_grasp_penalty_weight * bad_grasp.to(dtype=dtype)
+
+    if stage <= 1:
+        success = distance_to_obj < 0.05
+        reward_success = 5.0 * success.to(dtype=dtype)
+        reward_grasp = torch.zeros_like(reward_grasp)
+        reward_lift = torch.zeros_like(reward_lift)
+        reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
+        far_close_penalty = torch.zeros_like(far_close_penalty)
+        fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
 
     # 将新惩罚项加入到总奖励中（原有奖励变量名请根据实际情况调整）
     # 通常原有奖励已经汇总为一个变量（例如 reward_total），如果尚未汇总，你需要将以下项加到返回的字典中
