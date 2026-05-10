@@ -437,7 +437,7 @@ def _compute_step_return(
     ) # 鼓励末端执行器保持向下的姿态，便于抓取物体
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 2 * 10
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 10
     TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
     # dist_ee_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
