@@ -443,7 +443,7 @@ def _compute_step_return(
     # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
     distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
-        1.0 - torch.tanh(
+        0.5 - torch.tanh(
             distance_to_obj / TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ
         )) # 鼓励末端执行器接近物体
 
@@ -525,8 +525,11 @@ def _compute_step_return(
         reward_grasp = torch.zeros_like(reward_grasp)
         reward_lift = torch.zeros_like(reward_lift)
         reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
-        far_close_penalty = torch.zeros_like(far_close_penalty)
-        fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
+        # far_close_penalty = torch.zeros_like(far_close_penalty)
+        # fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
+        reward_top_down_orientation = torch.zeros_like(reward_top_down_orientation)
+
+
 
     # 将新惩罚项加入到总奖励中（原有奖励变量名请根据实际情况调整）
     # 通常原有奖励已经汇总为一个变量（例如 reward_total），如果尚未汇总，你需要将以下项加到返回的字典中
