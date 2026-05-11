@@ -32,6 +32,7 @@ from srb.utils.math import (
 )
 
 from .asset import select_sample
+from .terrain import terrain_surface_heights
 
 ##############
 ### Config ###
@@ -149,16 +150,52 @@ class Task(ManipulationEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
+        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if self._scenery is not None:
+            root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
+            terrain_prim_path = self._scenery.prim_paths[0]
+            terrain_heights = terrain_surface_heights(
+                terrain_prim_path,
+                root_pose,
+                self.scene.env_origins,
+                env_ids_tensor,
+            )
+            root_pose[:, 2] = terrain_heights + 0.08
+            self._obj.write_root_pose_to_sim(
+                torch.cat(
+                    [root_pose, self._obj.data.root_quat_w[env_ids_tensor]], dim=-1
+                ),
+                env_ids=env_ids_tensor,
+            )
         self._tf_pos_obj_initial[env_ids] = self._obj.data.root_com_pos_w[env_ids]
         self._robot.data.joint_acc[env_ids] = 0.0
         self._robot.data.applied_torque[env_ids] = 0.0
         self._robot.data.joint_vel[env_ids] = 0.0
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
-        if self.cfg.stage <= 1 and actions.size(1) > 6:
-            actions = actions.clone()
-            actions[:, -1] = 0.0
-        super()._pre_physics_step(actions)
+        processed_actions = actions
+        if actions.size(1) > 6:
+            processed_actions = actions.clone()
+            if self.cfg.stage <= 1:
+                processed_actions[:, -1] = 0.0
+            else:
+                tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[:, 0, :]
+                tf_pos_obj = self._obj.data.root_com_pos_w
+                distance_xy_to_obj = torch.norm(
+                    tf_pos_obj[:, :2] - tf_pos_end_effector[:, :2], dim=1
+                )
+                height_above_obj = tf_pos_end_effector[:, 2] - tf_pos_obj[:, 2]
+                allow_close = (
+                    (distance_xy_to_obj < 0.06)
+                    & (height_above_obj > -0.02)
+                    & (height_above_obj < 0.12)
+                )
+                processed_actions[:, -1] = torch.where(
+                    allow_close,
+                    processed_actions[:, -1],
+                    torch.zeros_like(processed_actions[:, -1]),
+                )
+        super()._pre_physics_step(processed_actions)
 
     def extract_step_return(self) -> StepReturn:
         return _compute_step_return(
@@ -202,11 +239,26 @@ class Task(ManipulationEnv):
             tf_quat_obj=self._obj.data.root_com_quat_w,
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
+            terrain_height_end_effector=(
+                terrain_surface_heights(
+                    self._scenery.prim_paths[0],
+                    self._tf_end_effector.data.target_pos_w[:, 0, :],
+                    self.scene.env_origins,
+                    torch.arange(self.num_envs, device=self.device, dtype=torch.long),
+                )
+                if self._scenery is not None
+                else torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+            ),
             # Contacts
             contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
             contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
             if isinstance(self._contacts_end_effector, ContactSensor)
             else None,
+            contact_forces_end_effector_collision=(
+                self._contacts_end_effector_collision.data.net_forces_w
+                if isinstance(self._contacts_end_effector_collision, ContactSensor)
+                else None
+            ),
             contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
             if isinstance(self._contacts_end_effector, ContactSensor)
             else None,
@@ -287,9 +339,11 @@ def _compute_step_return(
     tf_quat_obj: torch.Tensor,
     tf_pos_target: torch.Tensor,
     tf_quat_target: torch.Tensor,
+    terrain_height_end_effector: torch.Tensor,
     # Contacts
     contact_forces_robot: torch.Tensor,
     contact_forces_end_effector: torch.Tensor | None,
+    contact_forces_end_effector_collision: torch.Tensor | None,
     contact_force_matrix_end_effector: torch.Tensor | None,
 ) -> StepReturn:
     num_envs = episode_length.size(0)
@@ -372,6 +426,8 @@ def _compute_step_return(
     tf_rotmat_obj_to_target = matrix_from_quat(tf_quat_obj_to_target)
     tf_rot6d_obj_to_target = rotmat_to_rot6d(tf_rotmat_obj_to_target)
 
+    height_above_terrain = tf_pos_end_effector[:, 2] - terrain_height_end_effector
+
     ## Contacts
     contact_forces_mean_robot = contact_forces_robot.mean(dim=1)
     contact_forces_mean_end_effector = (
@@ -379,9 +435,19 @@ def _compute_step_return(
         if contact_forces_end_effector is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
+    contact_forces_mean_end_effector_collision = (
+        contact_forces_end_effector_collision.mean(dim=1)
+        if contact_forces_end_effector_collision is not None
+        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+    )
     contact_forces_end_effector = (
         contact_forces_end_effector
         if contact_forces_end_effector is not None
+        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+    )
+    contact_forces_end_effector_collision = (
+        contact_forces_end_effector_collision
+        if contact_forces_end_effector_collision is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
 
@@ -420,6 +486,11 @@ def _compute_step_return(
         > THRESHOLD_UNDESIRED_ROBOT_CONTACTS
     ) # 惩罚机器人与环境的过大接触力，鼓励更轻柔的操作
 
+    # Penalty: End-effector too close to / below terrain surface
+    GROUND_CLEARANCE_MARGIN = 0.015
+    ground_clearance_violation = height_above_terrain < GROUND_CLEARANCE_MARGIN
+    penalty_end_effector_ground_clearance = -2.0 * ground_clearance_violation.to(dtype=dtype)
+
     # Penalty: Time (鼓励快速完成任务)
     WEIGHT_TIME_PENALTY = -0.005
     penalty_time = WEIGHT_TIME_PENALTY * torch.ones(num_envs, dtype=dtype, device=device)
@@ -436,28 +507,74 @@ def _compute_step_return(
         1.0 - torch.tanh((1.0 - top_down_alignment) / TANH_STD_TOP_DOWN_ORIENTATION)
     ) # 鼓励末端执行器保持向下的姿态，便于抓取物体
 
+    # Reward: Pre-grasp alignment
+    PREGRASP_HEIGHT_OFFSET = 0.08
+    PREGRASP_ALIGNMENT_THRESHOLD = 0.85
+    PREGRASP_XY_THRESHOLD = 0.03
+    PREGRASP_HEIGHT_THRESHOLD = 0.03
+    delta_pos_end_effector_to_obj_world = tf_pos_obj - tf_pos_end_effector
+    distance_xy_to_obj = torch.norm(delta_pos_end_effector_to_obj_world[:, :2], dim=-1)
+    height_above_obj = tf_pos_end_effector[:, 2] - tf_pos_obj[:, 2]
+    pregrasp_height_error = torch.abs(height_above_obj - PREGRASP_HEIGHT_OFFSET)
+    pregrasp_ready = (
+        (distance_xy_to_obj < PREGRASP_XY_THRESHOLD)
+        & (pregrasp_height_error < PREGRASP_HEIGHT_THRESHOLD)
+        & (top_down_alignment > PREGRASP_ALIGNMENT_THRESHOLD)
+    )
+
+    WEIGHT_LATERAL_ALIGNMENT = 4.0
+    TANH_STD_LATERAL_ALIGNMENT = 0.08
+    reward_lateral_alignment = WEIGHT_LATERAL_ALIGNMENT * (
+        1.0 - torch.tanh(distance_xy_to_obj / TANH_STD_LATERAL_ALIGNMENT)
+    )
+
+    WEIGHT_PREGRASP_HEIGHT = 3.0
+    TANH_STD_PREGRASP_HEIGHT = 0.04
+    reward_pregrasp_height = WEIGHT_PREGRASP_HEIGHT * (
+        1.0 - torch.tanh(pregrasp_height_error / TANH_STD_PREGRASP_HEIGHT)
+    )
+
+    WEIGHT_PREGRASP_READY = 2.0
+    reward_pregrasp_ready = WEIGHT_PREGRASP_READY * pregrasp_ready.to(dtype=dtype)
+
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 10
-    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5
+    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.25
     # dist_ee_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
     distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
-        0.5 - torch.tanh(
+        1.0 - torch.tanh(
             distance_to_obj / TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
     WEIGHT_GRASP = 4.0 * 2
     THRESHOLD_GRASP = 2.5
-    reward_grasp = (
-        WEIGHT_GRASP * ( 
-            torch.mean(torch.max(torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1)[0],
-                dim=1,)  > THRESHOLD_GRASP
+    contact_force_sample_mean = (
+        torch.mean(
+            torch.max(torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1)[0],
+            dim=1,
         )
         if contact_force_matrix_end_effector is not None
         else torch.zeros(num_envs, dtype=dtype, device=device)
+    )
+    reward_grasp = (
+        WEIGHT_GRASP * (contact_force_sample_mean > THRESHOLD_GRASP).to(dtype=dtype)
     ) # 鼓励成功抓取物体，基于末端执行器的接触力矩阵中最大接触力的平均值是否超过阈值
+
+    # Reward / Penalty: End-effector collisions with ground or other scene objects
+    THRESHOLD_END_EFFECTOR_COLLISION = 6.0
+    collision_force_max_end_effector = (
+        torch.max(torch.norm(contact_forces_end_effector_collision, dim=-1), dim=1)[0]
+        if contact_forces_end_effector_collision is not None
+        else torch.zeros(num_envs, dtype=dtype, device=device)
+    )
+    undesired_end_effector_collision = (
+        (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION)
+        & ~(contact_force_sample_mean > THRESHOLD_GRASP)
+    )
+    penalty_end_effector_collision = -2.0 * undesired_end_effector_collision.to(dtype=dtype)
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
@@ -507,27 +624,25 @@ def _compute_step_return(
 
     # 1. 远距离闭合惩罚
     far_close_penalty_weight = -1.0
-    far_close_penalty = far_close_penalty_weight * (gripper_closed & (distance_to_obj > 0.15)).to(dtype=dtype)
+    far_close_penalty = far_close_penalty_weight * (
+        gripper_closed
+        & ((distance_xy_to_obj > 0.08) | (height_above_obj > 0.12))
+    ).to(dtype=dtype)
 
     # 2. 虚抓惩罚：闭合但没有有效接触力（接触力 < 2.0 N）
     # 注意：contact_force_matrix_end_effector 可能为 None，需判空
-    if contact_force_matrix_end_effector is not None:
-        contact_force_max = torch.norm(contact_force_matrix_end_effector, dim=-1).max(dim=1)[0]
-        bad_grasp = gripper_closed & (contact_force_max < 2.0)
-    else:
-        bad_grasp = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    bad_grasp = gripper_closed & (contact_force_sample_mean < 2.0)
     fake_grasp_penalty_weight = -0.5
     fake_grasp_penalty = fake_grasp_penalty_weight * bad_grasp.to(dtype=dtype)
 
     if stage <= 1:
-        success = distance_to_obj < 0.05
-        reward_success = 5.0 * success.to(dtype=dtype)
+        success = pregrasp_ready
+        reward_success = 8.0 * success.to(dtype=dtype)
         reward_grasp = torch.zeros_like(reward_grasp)
         reward_lift = torch.zeros_like(reward_lift)
         reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
-        # far_close_penalty = torch.zeros_like(far_close_penalty)
-        # fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
-        reward_top_down_orientation = torch.zeros_like(reward_top_down_orientation)
+        far_close_penalty = torch.zeros_like(far_close_penalty)
+        fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
 
 
 
@@ -539,7 +654,7 @@ def _compute_step_return(
     ## Terminations ##
     ##################
     # No termination condition
-    termination = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    termination = undesired_end_effector_collision | (height_above_terrain < 0.0)
     # Truncation
     truncation = (
         episode_length >= max_episode_length
@@ -552,10 +667,17 @@ def _compute_step_return(
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,
                 "contact_forces_mean_end_effector": contact_forces_mean_end_effector,
+                "contact_forces_mean_end_effector_collision": contact_forces_mean_end_effector_collision,
+                "height_above_terrain": height_above_terrain.unsqueeze(-1),
+                "distance_xy_end_effector_to_obj": distance_xy_to_obj.unsqueeze(-1),
+                "height_above_obj": height_above_obj.unsqueeze(-1),
                 "tf_pos_end_effector_to_obj": tf_pos_end_effector_to_obj,
                 "tf_rot6d_end_effector_to_obj": tf_rot6d_end_effector_to_obj,
                 "tf_pos_obj_to_target": tf_pos_obj_to_target,
                 "tf_rot6d_obj_to_target": tf_rot6d_obj_to_target,
+                "end_effector_collision_force_max": collision_force_max_end_effector.unsqueeze(-1),
+                "end_effector_collision_undesired": undesired_end_effector_collision.float().unsqueeze(-1),
+                "pregrasp_ready": pregrasp_ready.float().unsqueeze(-1),
                 "success": success.float().unsqueeze(-1),
             },
             "state_dyn": {
@@ -579,7 +701,11 @@ def _compute_step_return(
             "penalty_joint_acceleration": penalty_joint_acceleration,
             "penalty_undesired_robot_contacts": penalty_undesired_robot_contacts,
             "penalty_time": penalty_time,
+            "penalty_end_effector_ground_clearance": penalty_end_effector_ground_clearance,
             "reward_top_down_orientation": reward_top_down_orientation,
+            "reward_lateral_alignment": reward_lateral_alignment,
+            "reward_pregrasp_height": reward_pregrasp_height,
+            "reward_pregrasp_ready": reward_pregrasp_ready,
             "reward_distance_end_effector_to_obj": reward_distance_end_effector_to_obj,
             "reward_grasp": reward_grasp,
             "reward_lift": reward_lift,
@@ -587,6 +713,7 @@ def _compute_step_return(
             "reward_success": reward_success,
             "far_close_penalty": far_close_penalty,
             "fake_grasp_penalty": fake_grasp_penalty,
+            "penalty_end_effector_collision": penalty_end_effector_collision,
         },
         termination,
         truncation,

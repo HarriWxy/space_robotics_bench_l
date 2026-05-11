@@ -21,6 +21,7 @@ from srb.core.sim import (
     RigidBodyPropertiesCfg,
     UsdFileCfg,
 )
+from srb.assets.object.tool import RobotiqHandE
 from srb.utils.math import deg_to_rad, rpy_to_quat
 from srb.utils.nucleus import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
@@ -452,6 +453,10 @@ class UR5(SerialManipulator):
             rot=rpy_to_quat(0.0, -60.0, 180.0),
         ),
     )
+
+
+class UR5RobotiqHandE(UR5):
+    end_effector: RobotiqHandE | None = RobotiqHandE()
 
 
 class UR5e(SerialManipulator):

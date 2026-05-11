@@ -134,6 +134,8 @@ def hydra_task_config(
                 # Update the configs with the Hydra command line arguments
                 # Env_cfg.from_dict(hydra_env_cfg["env"])
                 env_cfg = reconstruct_object(env_cfg, hydra_env_cfg["env"])
+                # Rebuild derived scene/action state after CLI overrides mutate the config tree.
+                env_cfg.__post_init__()
                 # Replace strings that represent gymnasium spaces because OmegaConf does not support them.
                 # This must be done after converting the env configs from dictionary to avoid internal reinterpretations
                 replace_strings_with_env_cfg_spaces(env_cfg)
@@ -162,6 +164,7 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
             and isinstance(updates, str)
             and all(c not in string.whitespace for c in updates)
         ):
+            normalized_updates = updates.replace("+", "_")
             if ":" in updates and not callable(obj):
                 ## Object updated via its full module path and name
                 mod_name, attr_name = updates.split(":")
@@ -183,7 +186,14 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
                     if variant := AssetVariant.from_str(updates):
                         # Asset variant updated via its name
                         return variant
-                    elif asset_class := AssetRegistry.get_by_name(updates):
+                    elif asset_class := (
+                        AssetRegistry.get_by_name(updates)
+                        or (
+                            AssetRegistry.get_by_name(normalized_updates)
+                            if normalized_updates != updates
+                            else None
+                        )
+                    ):
                         # Asset variant updated via asset name
                         return asset_class()  # type: ignore
 

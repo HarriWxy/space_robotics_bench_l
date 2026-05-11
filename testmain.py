@@ -18,20 +18,20 @@ if __name__ == "__main__":
         # "eval", #
         "train",
         "--algo",
-        "sbx_sac",
+        "sbx_ppo",
         "--env",
         "sample_collection",
+        "--cfg",
+        "IGNORE",
         "env.domain=moon",
         "env.sample=moon_rock",
-        # "env.scenery=ground_plane",
-        # "env.debug_vis=true",
-        "env.num_envs=256", # 
-        "env.sim.device=cuda",
-        # "--model=./logs/landing/sbx_sac/20260414T103257/ckpt/srb-landing.zip",
         "env.robot=ur5+robotiq_hand_e",
+        "env.stage=1",
+        "env.episode_length_s=6.5",
+        "env.num_envs=256",
+        "env.sim.device=cuda",
         "--headless",
-        # "--continue_training",
+        "--continue_training",
+        # "agent.ent_coef=0.01",
     ])
 
-
-# pip install omniverse-kit --extra-index-url https://pypi.nvidia.com

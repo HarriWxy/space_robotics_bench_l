@@ -6,6 +6,7 @@ from .unitree import UnitreeZ1  # noqa: F401
 from .universal_robots import (  # noqa: F401
     UR3,
     UR5,
+    UR5RobotiqHandE,
     UR10,
     UR20,
     UR30,
