@@ -701,7 +701,7 @@ def _compute_step_return(
             "penalty_joint_acceleration": penalty_joint_acceleration,
             "penalty_undesired_robot_contacts": penalty_undesired_robot_contacts,
             "penalty_time": penalty_time,
-            "penalty_end_effector_ground_clearance": penalty_end_effector_ground_clearance,
+            "penalty_end_e_g_c": penalty_end_effector_ground_clearance,
             "reward_top_down_orientation": reward_top_down_orientation,
             "reward_lateral_alignment": reward_lateral_alignment,
             "reward_pregrasp_height": reward_pregrasp_height,
