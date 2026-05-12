@@ -13,6 +13,7 @@ from srb.core.action import (
     RelativeJointPositionActionCfg,
 )
 from srb.core.action.action_group import ActionGroup
+from srb.core.action.term.common import ScalarJointPositionActionCfg
 from srb.utils.cfg import configclass
 
 
@@ -47,6 +48,14 @@ class JointPositionBoundedEMAActionGroup(ActionGroup):
 @configclass
 class JointPositionBinaryActionGroup(ActionGroup):
     joint_pos: BinaryJointPositionActionCfg = MISSING  # type: ignore
+
+    def map_cmd_to_action(self, twist: torch.Tensor, event: bool) -> torch.Tensor:
+        return torch.Tensor((-1.0 if event else 1.0,)).to(device=twist.device)
+
+
+@configclass
+class JointPositionScalarActionGroup(ActionGroup):
+    joint_pos: ScalarJointPositionActionCfg = MISSING  # type: ignore
 
     def map_cmd_to_action(self, twist: torch.Tensor, event: bool) -> torch.Tensor:
         return torch.Tensor((-1.0 if event else 1.0,)).to(device=twist.device)

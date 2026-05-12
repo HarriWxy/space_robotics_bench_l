@@ -26,7 +26,7 @@ if __name__ == "__main__":
         "env.sample=moon_rock",
         "env.robot=ur5+robotiq_hand_e",
         "env.stage=2",
-        "env.episode_length_s=8.0",
+        "env.episode_length_s=12.0",
         "env.num_envs=256",
         "env.sim.device=cuda",
         "--headless",

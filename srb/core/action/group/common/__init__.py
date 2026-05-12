@@ -10,6 +10,7 @@ from .joint import (  # noqa: F401
     JointPositionBoundedActionGroup,
     JointPositionBoundedEMAActionGroup,
     JointPositionRelativeActionGroup,
+    JointPositionScalarActionGroup,
     JointVelocityActionGroup,
     JointVelocityBinaryActionGroup,
 )

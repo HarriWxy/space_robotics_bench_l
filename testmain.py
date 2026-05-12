@@ -30,7 +30,7 @@ if __name__ == "__main__":
         "env.episode_length_s=6.5",
         "env.num_envs=256",
         "env.sim.device=cuda",
-        "--headless",
+        # "--headless",
         "--continue_training",
         # "agent.ent_coef=0.01",
     ])

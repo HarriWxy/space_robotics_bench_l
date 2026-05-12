@@ -116,5 +116,13 @@ Hydra 是一个开源的 Python 框架，旨在简化复杂应用程序的配置
 
 如果你想要“越抬越多”而不是“到某个高度为最优”，这部分可以再调整。
 
+## warning
 
+*WARN: Box high's precision lowered by casting to float32, current high.dtype=float64* 对应 [spaces.py](/root/isaaclab/source/isaaclab/isaaclab/envs/utils/spaces.py) 中 deserialize_space 函数：
+`return gym.spaces.Box(low=np.array(obj["low"]).astype(np.float32), high=np.array(obj["high"]).astype(np.float32), shape=obj["shape"])`
 
+## docker 增挂载
+
+[blog](https://www.cnblogs.com/azureology/p/17296787.html)
+
+pip install omniverse-kit --extra-index-url https://pypi.nvidia.com
