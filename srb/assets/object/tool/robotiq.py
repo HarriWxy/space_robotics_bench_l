@@ -1,6 +1,6 @@
 from srb.core.action.action_group import ActionGroup
-from srb.core.action.group.common import JointPositionScalarActionGroup
-from srb.core.action.term.common import ScalarJointPositionActionCfg
+from srb.core.action.group.common import JointPositionBoundedActionGroup
+from srb.core.action import JointPositionToLimitsActionCfg
 from srb.core.actuator import ImplicitActuatorCfg
 from srb.core.asset import ActiveTool, ArticulationCfg, Frame, Transform
 from srb.core.sim import (
@@ -54,12 +54,12 @@ class RobotiqHandE(ActiveTool):
     )
 
     ## Actions
-    actions: ActionGroup = JointPositionScalarActionGroup(
-        ScalarJointPositionActionCfg(
+    actions: ActionGroup = JointPositionBoundedActionGroup(
+        JointPositionToLimitsActionCfg(
             asset_name="robot",
             joint_names=["Slider_[1-2]"],
-            close_command_expr={"Slider_[1-2]": -0.025},
-            open_command_expr={"Slider_[1-2]": 0.0},
+            scale=1.0,
+            rescale_to_limits=True,
         ),
     )
 

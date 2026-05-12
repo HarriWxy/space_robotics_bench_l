@@ -244,8 +244,9 @@ class Task(ManipulationEnv):
         processed_actions = actions
         if actions.size(1) > 6:
             processed_actions = actions.clone()
+            gripper_actions = processed_actions[:, 6:]
             if self.cfg.stage <= 1:
-                processed_actions[:, -1] = 1.0
+                processed_actions[:, 6:] = torch.ones_like(gripper_actions)
             else:
                 tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[:, 0, :]
                 tf_pos_obj = self._obj.data.root_com_pos_w
@@ -257,9 +258,9 @@ class Task(ManipulationEnv):
                 lower_gate = torch.clamp((height_above_obj + 0.03) / 0.06, 0.0, 1.0)
                 upper_gate = torch.clamp((0.12 - height_above_obj) / 0.12, 0.0, 1.0)
                 close_scale = 0.15 + 0.85 * lateral_gate * lower_gate * upper_gate
-                close_action = torch.clamp_min(-processed_actions[:, -1], 0.0)
-                open_action = torch.clamp_min(processed_actions[:, -1], 0.0)
-                processed_actions[:, -1] = open_action - close_action * close_scale
+                close_action = torch.clamp_min(-gripper_actions, 0.0)
+                open_action = torch.clamp_min(gripper_actions, 0.0)
+                processed_actions[:, 6:] = open_action - close_action * close_scale.unsqueeze(-1)
         super()._pre_physics_step(processed_actions)
 
     def extract_step_return(self) -> StepReturn:
@@ -291,6 +292,10 @@ class Task(ManipulationEnv):
                 )
                 else None
             ),
+            joint_vel_robot=self._robot.data.joint_vel,
+            joint_vel_end_effector=self._end_effector.data.joint_vel
+            if isinstance(self._end_effector, Articulation)
+            else None,
             joint_acc_robot=self._robot.data.joint_acc,
             joint_applied_torque_robot=self._robot.data.applied_torque,
             # Kinematics
@@ -393,6 +398,8 @@ def _compute_step_return(
     joint_pos_limits_robot: torch.Tensor | None,
     joint_pos_end_effector: torch.Tensor | None,
     joint_pos_limits_end_effector: torch.Tensor | None,
+    joint_vel_robot: torch.Tensor,
+    joint_vel_end_effector: torch.Tensor | None,
     joint_acc_robot: torch.Tensor,
     joint_applied_torque_robot: torch.Tensor,
     # Kinematics
@@ -468,6 +475,11 @@ def _compute_step_return(
 
     # joint_pos_robot_normalized = torch.clamp(joint_pos_robot_normalized, -5.0, 5.0)
     # joint_pos_end_effector_normalized = torch.clamp(joint_pos_end_effector_normalized, -5.0, 5.0)
+    joint_vel_end_effector_obs = (
+        joint_vel_end_effector
+        if joint_vel_end_effector is not None
+        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+    )
 
     ## Kinematics
     fk_rotmat_end_effector = matrix_from_quat(fk_quat_end_effector)
@@ -497,8 +509,14 @@ def _compute_step_return(
 
     height_above_terrain = tf_pos_end_effector[:, 2] - terrain_height_end_effector
     obj_lift_height = torch.clamp_min(tf_pos_obj[:, 2] - tf_pos_obj_initial[:, 2], 0.0)
+    distance_obj_to_target = torch.norm(tf_pos_obj_to_target, dim=-1)
     obj_lin_speed = torch.norm(vel_lin_obj, dim=1)
     obj_ang_speed = torch.norm(vel_ang_obj, dim=1)
+    gripper_aperture = (
+        torch.mean(joint_pos_end_effector_normalized, dim=1)
+        if joint_pos_end_effector_normalized.size(1) > 0
+        else torch.zeros(num_envs, dtype=dtype, device=device)
+    )
 
     ## Contacts
     contact_forces_mean_robot = contact_forces_robot.mean(dim=1)
@@ -683,7 +701,7 @@ def _compute_step_return(
     TANH_STD_DISTANCE_OBJ_TO_TARGET = 0.2
     reward_distance_obj_to_target = transport_ready.to(dtype=dtype) * WEIGHT_DISTANCE_OBJ_TO_TARGET * (
         1.0 - torch.tanh(
-            torch.norm(tf_pos_obj_to_target, dim=-1) / TANH_STD_DISTANCE_OBJ_TO_TARGET
+            distance_obj_to_target / TANH_STD_DISTANCE_OBJ_TO_TARGET
         )
     )
 
@@ -699,8 +717,8 @@ def _compute_step_return(
     # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
     if act_current.size(1) > 6:
-        gripper_action = act_current[:, -1]
-        gripper_closed = gripper_action < -0.1
+        gripper_action = act_current[:, 6:]
+        gripper_closed = torch.mean(gripper_action, dim=1) < -0.1
     else:
         gripper_closed = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
@@ -757,16 +775,25 @@ def _compute_step_return(
                 "height_above_terrain": height_above_terrain.unsqueeze(-1),
                 "distance_xy_end_effector_to_obj": distance_xy_to_obj.unsqueeze(-1),
                 "height_above_obj": height_above_obj.unsqueeze(-1),
+                "sample_lift_height": obj_lift_height.unsqueeze(-1),
+                "distance_obj_to_target": distance_obj_to_target.unsqueeze(-1),
+                "sample_lin_speed": obj_lin_speed.unsqueeze(-1),
+                "sample_ang_speed": obj_ang_speed.unsqueeze(-1),
+                "gripper_aperture": gripper_aperture.unsqueeze(-1),
                 "tf_pos_end_effector_to_obj": tf_pos_end_effector_to_obj,
                 "tf_rot6d_end_effector_to_obj": tf_rot6d_end_effector_to_obj,
                 "tf_pos_obj_to_target": tf_pos_obj_to_target,
                 "tf_rot6d_obj_to_target": tf_rot6d_obj_to_target,
+                "stable_grasp": stable_grasp.float().unsqueeze(-1),
+                "transport_ready": transport_ready.float().unsqueeze(-1),
                 "end_effector_collision_force_max": collision_force_max_end_effector.unsqueeze(-1),
                 "end_effector_collision_undesired": undesired_end_effector_collision.float().unsqueeze(-1),
                 "pregrasp_ready": pregrasp_ready.float().unsqueeze(-1),
                 "success": success.float().unsqueeze(-1),
             },
             "state_dyn": {
+                "sample_lin_vel": vel_lin_obj,
+                "sample_ang_vel": vel_ang_obj,
                 "contact_forces_robot": contact_forces_robot,
                 "contact_forces_end_effector": contact_forces_end_effector,
             },
@@ -777,6 +804,8 @@ def _compute_step_return(
             "proprio_dyn": {
                 "joint_pos_robot_normalized": joint_pos_robot_normalized,
                 "joint_pos_end_effector_normalized": joint_pos_end_effector_normalized,
+                "joint_vel_robot": joint_vel_robot,
+                "joint_vel_end_effector": joint_vel_end_effector_obs,
                 "joint_acc_robot": joint_acc_robot,
                 "joint_applied_torque_robot": joint_applied_torque_robot,
             },
