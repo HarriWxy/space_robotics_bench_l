@@ -166,7 +166,7 @@ class Task(ManipulationEnv):
             baseline_pose[:, 2] = terrain_heights + 0.08
             root_pose[:, 2] = baseline_pose[:, 2]
 
-        if self.cfg.stage > 1 and len(env_ids_tensor) > 0:
+        if self.cfg.stage > 1 and len(env_ids_tensor) > 0: # 仅在第二阶段及以上进行预抓取位置的随机化
             tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
             curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device)
             pregrasp_mask = curriculum_mix < 0.45
@@ -516,7 +516,7 @@ def _compute_step_return(
         torch.mean(joint_pos_end_effector_normalized, dim=1)
         if joint_pos_end_effector_normalized.size(1) > 0
         else torch.zeros(num_envs, dtype=dtype, device=device)
-    )
+    ) # 夹爪张开程度（假设所有夹爪关节的平均位置可以代表整体张开程度）
 
     ## Contacts
     contact_forces_mean_robot = contact_forces_robot.mean(dim=1)
@@ -591,7 +591,7 @@ def _compute_step_return(
     top_down_alignment = torch.sum(
         fk_rotmat_end_effector[:, :, 2] * torch.tensor((0.0, 0.0, -1.0), device=device)
         .unsqueeze(0).expand(num_envs, 3), dim=1,
-    )
+    ) # 计算末端执行器 Z 轴与世界坐标系向下方向的对齐程度，值越接近 1.0 表示越向下，鼓励末端执行器保持向下的姿态，便于抓取物体
     # top_down_alignment = torch.nan_to_num(top_down_alignment, 0.0, 1.0, -1.0)  # 处理 NaN 和 inf，确保在 [-1, 1] 范围内
     reward_top_down_orientation = WEIGHT_TOP_DOWN_ORIENTATION * (
         1.0 - torch.tanh((1.0 - top_down_alignment) / TANH_STD_TOP_DOWN_ORIENTATION)
@@ -612,7 +612,7 @@ def _compute_step_return(
         & (top_down_alignment > PREGRASP_ALIGNMENT_THRESHOLD)
     )
 
-    WEIGHT_LATERAL_ALIGNMENT = 4.0 / stage
+    WEIGHT_LATERAL_ALIGNMENT = 4.0 * 10  / stage
     TANH_STD_LATERAL_ALIGNMENT = 0.08
     reward_lateral_alignment = WEIGHT_LATERAL_ALIGNMENT * (
         1.0 - torch.tanh(distance_xy_to_obj / TANH_STD_LATERAL_ALIGNMENT)
@@ -628,18 +628,18 @@ def _compute_step_return(
     reward_pregrasp_ready = WEIGHT_PREGRASP_READY * pregrasp_ready.to(dtype=dtype)
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5
-    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.25
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 40
+    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
     # dist_ee_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
     distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
-        1.0 - torch.tanh(
+        0.8 - torch.tanh(
             distance_to_obj / TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0 * 2
+    WEIGHT_GRASP = 4.0 * 40
     THRESHOLD_GRASP = 2.5
     contact_force_sample_mean = (
         torch.mean(
@@ -658,7 +658,7 @@ def _compute_step_return(
     transport_ready = stable_grasp & (obj_lift_height > 0.06)
     reward_grasp = WEIGHT_GRASP * stable_grasp.to(dtype=dtype)
 
-    WEIGHT_GRASP_STABILITY = 3.0
+    WEIGHT_GRASP_STABILITY = 3.0 * 40
     reward_grasp_stability = (
         WEIGHT_GRASP_STABILITY
         * stable_grasp.to(dtype=dtype)
@@ -680,7 +680,7 @@ def _compute_step_return(
     penalty_end_effector_collision = -2.0 * undesired_end_effector_collision.to(dtype=dtype)
 
     # ========== 稀疏成功奖励（新增） ==========
-    WEIGHT_SUCCESS = 20.0                # 成功奖励的权重
+    WEIGHT_SUCCESS = 20.0 * 40               # 成功奖励的权重
     LIFT_HEIGHT_SUCCESS = 0.18           # 提起 18 cm 即视为成功，便于第二阶段更早收到稀疏正反馈
     
     success = stable_grasp & (obj_lift_height > LIFT_HEIGHT_SUCCESS)
@@ -688,7 +688,7 @@ def _compute_step_return(
 
 
     # Reward: Lift object
-    WEIGHT_LIFT = 6.0
+    WEIGHT_LIFT = 6.0 * 40
     reward_lift = (
         WEIGHT_LIFT
         * stable_grasp.to(dtype=dtype)
@@ -712,7 +712,7 @@ def _compute_step_return(
         reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
         reward_distance_end_effector_to_obj = (
             reward_distance_end_effector_to_obj * pregrasp_focus
-        )
+        ) # 第二阶段开始后，稳定抓取的环境不再获得末端执行器与物体距离的奖励，鼓励它们专注于保持稳定抓取和完成运输任务
 
     # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
