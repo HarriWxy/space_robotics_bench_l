@@ -1,6 +1,6 @@
 from srb.utils.registry import register_srb_tasks
 
-from .task import Task, TaskCfg
+from .task_o import Task, TaskCfg
 from .task_multi import MultiTask, MultiTaskCfg
 from .task_visual import VisualMultiTask, VisualMultiTaskCfg, VisualTask, VisualTaskCfg
 

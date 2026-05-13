@@ -32,7 +32,6 @@ from srb.utils.math import (
 )
 
 from .asset import select_sample
-from .terrain import terrain_surface_heights
 
 ##############
 ### Config ###
@@ -147,20 +146,6 @@ class Task(ManipulationEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
-        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
-        if self.scene.scenery is not None:
-            root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
-            terrain_heights = terrain_surface_heights(
-                self.scene.scenery.prim_path,
-                root_pose,
-                self.scene.env_origins,
-                env_ids_tensor,
-            )
-            root_pose[:, 2] = terrain_heights + 0.08
-            self._obj.write_root_pose_to_sim(
-                torch.cat([root_pose, self._obj.data.root_quat_w[env_ids_tensor]], dim=-1),
-                env_ids=env_ids_tensor,
-            )
         self._tf_pos_obj_initial[env_ids] = self._obj.data.root_com_pos_w[env_ids]
 
     def extract_step_return(self) -> StepReturn:
@@ -369,8 +354,8 @@ def _compute_step_return(
     )
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5
-    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 60
+    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.15
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
         1.0
         - torch.tanh(
@@ -380,7 +365,7 @@ def _compute_step_return(
     )
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0
+    WEIGHT_GRASP = 4.0 * 40
     THRESHOLD_GRASP = 5.0
     reward_grasp = (
         WEIGHT_GRASP
@@ -398,7 +383,7 @@ def _compute_step_return(
     )
 
     # Reward: Lift object
-    WEIGHT_LIFT = 8.0
+    WEIGHT_LIFT = 8.0 * 40
     HEIGHT_OFFSET_LIFT = 0.5
     HEIGHT_SPAN_LIFT = 0.25
     TANH_STD_HEIGHT_LIFT = 0.1
