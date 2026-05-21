@@ -167,59 +167,57 @@ class Task(ManipulationEnv):
             root_pose[:, 2] = baseline_pose[:, 2]
 
         if self.cfg.stage > 1 and len(env_ids_tensor) > 0: # 仅在第二阶段及以上进行预抓取位置的随机化
-            tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
+            # tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
             curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device) # 为每个环境生成一个随机数，用于决定是进入预抓取位置、运输位置，还是保持初始位置
-            if self.cfg.stage == 2:
-                pregrasp_mask = curriculum_mix < 0.80
-                transport_mask = torch.zeros_like(pregrasp_mask)
-            else:
-                pregrasp_mask = curriculum_mix < 0.45
-                transport_mask = (curriculum_mix >= 0.65) & (curriculum_mix < 0.85)
+            # pregrasp_mask = curriculum_mix < 0.80 
+            # transport_mask = torch.zeros_like(pregrasp_mask) # 第二阶段不进行运输位置的随机化
+            pregrasp_mask = curriculum_mix < 0.75  # 第二阶段主要是预抓取位置的随机化，少量运输位置的随机化
+            transport_mask = (curriculum_mix >= 0.75) & (curriculum_mix < 0.95)
 
-            if pregrasp_mask.any():
-                pregrasp_pose = root_pose[pregrasp_mask].clone()
-                pregrasp_pose[:, :2] = (
-                    tf_pos_end_effector[pregrasp_mask, :2]
-                    + (0.006 if self.cfg.stage == 2 else 0.008)
-                    * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
-                )
-                if terrain_prim_path is not None: # 如果有地形信息，则将预抓取位置的高度调整到地形表面以上一定距离，避免末端执行器初始位置过低导致穿透地形或过高导致难以抓取
-                    pregrasp_heights = terrain_surface_heights(
-                        terrain_prim_path,
-                        pregrasp_pose,
-                        self.scene.env_origins,
-                        env_ids_tensor[pregrasp_mask],
-                    )
-                    pregrasp_pose[:, 2] = torch.maximum(
-                        pregrasp_heights + (0.045 if self.cfg.stage == 2 else 0.05),
-                        tf_pos_end_effector[pregrasp_mask, 2] - (0.04 if self.cfg.stage == 2 else 0.05),
-                    )
-                else:
-                    pregrasp_pose[:, 2] = (
-                        tf_pos_end_effector[pregrasp_mask, 2]
-                        - (0.04 if self.cfg.stage == 2 else 0.07)
-                    )
-                root_pose[pregrasp_mask] = pregrasp_pose
+            # if pregrasp_mask.any():
+            #     pregrasp_pose = root_pose[pregrasp_mask].clone()
+            #     pregrasp_pose[:, :2] = (
+            #         tf_pos_end_effector[pregrasp_mask, :2]
+            #         + (0.006 if self.cfg.stage == 2 else 0.008)
+            #         * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
+            #     )
+            #     if terrain_prim_path is not None: # 如果有地形信息，则将预抓取位置的高度调整到地形表面以上一定距离，避免末端执行器初始位置过低导致穿透地形或过高导致难以抓取
+            #         pregrasp_heights = terrain_surface_heights(
+            #             terrain_prim_path,
+            #             pregrasp_pose,
+            #             self.scene.env_origins,
+            #             env_ids_tensor[pregrasp_mask],
+            #         )
+            #         pregrasp_pose[:, 2] = torch.maximum(
+            #             pregrasp_heights + (0.045 if self.cfg.stage == 2 else 0.05),
+            #             tf_pos_end_effector[pregrasp_mask, 2] - (0.04 if self.cfg.stage == 2 else 0.05),
+            #         )
+            #     else:
+            #         pregrasp_pose[:, 2] = (
+            #             tf_pos_end_effector[pregrasp_mask, 2]
+            #             - (0.04 if self.cfg.stage == 2 else 0.07)
+            #         )
+            #     root_pose[pregrasp_mask] = pregrasp_pose
 
-            if transport_mask.any():
-                transport_pose = root_pose[transport_mask].clone()
-                transport_pose[:, :2] = (
-                    tf_pos_end_effector[transport_mask, :2]
-                    + 0.006 * torch.randn_like(tf_pos_end_effector[transport_mask, :2])
-                )
-                if terrain_prim_path is not None:
-                    transport_heights = terrain_surface_heights(
-                        terrain_prim_path,
-                        transport_pose,
-                        self.scene.env_origins,
-                        env_ids_tensor[transport_mask],
-                    )
-                    transport_pose[:, 2] = torch.maximum(
-                        transport_heights + 0.14,
-                        tf_pos_end_effector[transport_mask, 2] - 0.04,
-                    )
-                else:
-                    transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
+            # if transport_mask.any():
+            #     transport_pose = root_pose[transport_mask].clone()
+            #     transport_pose[:, :2] = (
+            #         tf_pos_end_effector[transport_mask, :2]
+            #         + 0.006 * torch.randn_like(tf_pos_end_effector[transport_mask, :2])
+            #     )
+            #     if terrain_prim_path is not None:
+            #         transport_heights = terrain_surface_heights(
+            #             terrain_prim_path,
+            #             transport_pose,
+            #             self.scene.env_origins,
+            #             env_ids_tensor[transport_mask],
+            #         )
+            #         transport_pose[:, 2] = torch.maximum(
+            #             transport_heights + 0.14,
+            #             tf_pos_end_effector[transport_mask, 2] - 0.04,
+            #         )
+            #     else:
+            #         transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
                 # root_pose[transport_mask] = transport_pose
 
             if isinstance(self._end_effector, Articulation):
@@ -352,7 +350,7 @@ class Task(ManipulationEnv):
         )
 
 
-# @torch.jit.script
+@torch.jit.script
 def _compute_step_return(
     *,
     ## Time
@@ -549,7 +547,7 @@ def _compute_step_return(
     # Penalty: End-effector too close to / below terrain surface
     GROUND_CLEARANCE_MARGIN = 0.015
     ground_clearance_violation = height_above_terrain < GROUND_CLEARANCE_MARGIN
-    penalty_end_effector_ground_clearance = -20.0 * ground_clearance_violation.to(dtype=dtype)
+    penalty_end_effector_ground_clearance = -5.0 * ground_clearance_violation.to(dtype=dtype)
 
     # Penalty: Time (鼓励快速完成任务)
     WEIGHT_TIME_PENALTY = -0.005
@@ -653,7 +651,7 @@ def _compute_step_return(
         (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION)
         & ~stable_grasp
     )
-    penalty_end_effector_collision = (-4.0 if stage == 2 else -20.0) * undesired_end_effector_collision.to(dtype=dtype)
+    penalty_end_effector_collision = -4.0 * undesired_end_effector_collision.to(dtype=dtype)
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0 * 4               # 成功奖励的权重
