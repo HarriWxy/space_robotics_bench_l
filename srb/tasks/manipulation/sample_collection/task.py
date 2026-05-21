@@ -768,7 +768,7 @@ def _compute_step_return(
     ## Terminations ##
     ##################
     # No termination condition
-    termination = undesired_end_effector_collision | (height_above_terrain < 0.0)
+    termination = torch.zeros(num_envs, dtype=torch.bool, device=device) # undesired_end_effector_collision | (height_above_terrain < 0.0)
     # Truncation
     truncation = (
         episode_length >= max_episode_length
