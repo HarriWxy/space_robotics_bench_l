@@ -76,7 +76,7 @@ class TaskCfg(ManipulationEnvCfg):
     is_finite_horizon: bool = True
 
     ## Curriculum
-    stage: int = 1
+    stage: int = 1  # 1: pre-grasp, 2: grasp + lift, 3: full sample collection
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.5, 0.0, 0.75)
@@ -163,22 +163,24 @@ class Task(ManipulationEnv):
                 self.scene.env_origins,
                 env_ids_tensor,
             )
-            baseline_pose[:, 2] = terrain_heights + 0.08
+            baseline_pose[:, 2] = terrain_heights + 0.03  # 将物体初始位置设置在地形表面以上一定高度，避免穿透地形或过高导致难以抓取
             root_pose[:, 2] = baseline_pose[:, 2]
 
         if self.cfg.stage > 1 and len(env_ids_tensor) > 0: # 仅在第二阶段及以上进行预抓取位置的随机化
             tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
-            curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device)
-            pregrasp_mask = curriculum_mix < 0.45
-            transport_mask = (curriculum_mix >= 0.45) & (curriculum_mix < 0.75)
+            curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device) # 为每个环境生成一个随机数，用于决定是进入预抓取位置、运输位置，还是保持初始位置
+            # pregrasp_mask = curriculum_mix < 0.80 
+            # transport_mask = torch.zeros_like(pregrasp_mask) # 第二阶段不进行运输位置的随机化
+            pregrasp_mask = curriculum_mix < 0.45  # 第二阶段主要是预抓取位置的随机化，少量运输位置的随机化
+            transport_mask = (curriculum_mix >= 0.65) & (curriculum_mix < 0.85)
 
             if pregrasp_mask.any():
                 pregrasp_pose = root_pose[pregrasp_mask].clone()
                 pregrasp_pose[:, :2] = (
                     tf_pos_end_effector[pregrasp_mask, :2]
-                    + 0.012 * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
+                    + 0.008  * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
                 )
-                if terrain_prim_path is not None:
+                if terrain_prim_path is not None: # 如果有地形信息，则将预抓取位置的高度调整到地形表面以上一定距离，避免末端执行器初始位置过低导致穿透地形或过高导致难以抓取
                     pregrasp_heights = terrain_surface_heights(
                         terrain_prim_path,
                         pregrasp_pose,
@@ -187,11 +189,14 @@ class Task(ManipulationEnv):
                     )
                     pregrasp_pose[:, 2] = torch.maximum(
                         pregrasp_heights + 0.05,
-                        tf_pos_end_effector[pregrasp_mask, 2] - 0.07,
+                        tf_pos_end_effector[pregrasp_mask, 2] - 0.05,
                     )
                 else:
-                    pregrasp_pose[:, 2] = tf_pos_end_effector[pregrasp_mask, 2] - 0.07
-                root_pose[pregrasp_mask] = pregrasp_pose
+                    pregrasp_pose[:, 2] = (
+                        tf_pos_end_effector[pregrasp_mask, 2]
+                        - (0.05 if self.cfg.stage == 2 else 0.07)
+                    )
+                # root_pose[pregrasp_mask] = pregrasp_pose  # 将满足预抓取条件的环境的物体位置设置为预抓取位置
 
             if transport_mask.any():
                 transport_pose = root_pose[transport_mask].clone()
@@ -212,7 +217,7 @@ class Task(ManipulationEnv):
                     )
                 else:
                     transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
-                root_pose[transport_mask] = transport_pose
+                # root_pose[transport_mask] = transport_pose
 
             if isinstance(self._end_effector, Articulation):
                 end_effector_joint_pos = self._end_effector.data.default_joint_pos[env_ids_tensor].clone()
@@ -254,10 +259,17 @@ class Task(ManipulationEnv):
                     tf_pos_obj[:, :2] - tf_pos_end_effector[:, :2], dim=1
                 )
                 height_above_obj = tf_pos_end_effector[:, 2] - tf_pos_obj[:, 2]
-                lateral_gate = torch.clamp((0.09 - distance_xy_to_obj) / 0.09, 0.0, 1.0)
-                lower_gate = torch.clamp((height_above_obj + 0.03) / 0.06, 0.0, 1.0)
-                upper_gate = torch.clamp((0.12 - height_above_obj) / 0.12, 0.0, 1.0)
-                close_scale = 0.15 + 0.85 * lateral_gate * lower_gate * upper_gate
+                lateral_gate_threshold = 0.12 if self.cfg.stage == 2 else 0.09
+                lower_gate = torch.clamp((height_above_obj + 0.04) / 0.08, 0.0, 1.0)
+                upper_gate_threshold = 0.16 if self.cfg.stage == 2 else 0.12
+                lateral_gate = torch.clamp(  # 当末端执行器在物体上方且水平距离较近时，允许夹爪闭合；否则逐渐限制夹爪闭合，鼓励智能体先将末端执行器移动到物体上方再进行闭合
+                    (lateral_gate_threshold - distance_xy_to_obj)
+                    / lateral_gate_threshold, 0.0, 1.0,
+                )
+                upper_gate = torch.clamp(  # 当末端执行器高度过高时，限制夹爪闭合，鼓励智能体先降低末端执行器高度再进行闭合
+                    (upper_gate_threshold - height_above_obj) / upper_gate_threshold, 0.0, 1.0,
+                )
+                close_scale = (0.35 if self.cfg.stage == 2 else 0.15) + 0.65 * lateral_gate * lower_gate * upper_gate
                 close_action = torch.clamp_min(-gripper_actions, 0.0)
                 open_action = torch.clamp_min(gripper_actions, 0.0)
                 processed_actions[:, 6:] = open_action - close_action * close_scale.unsqueeze(-1)
@@ -381,7 +393,7 @@ class Task(ManipulationEnv):
     #     return super()._pre_physics_step(modified_actions)
 
 
-@torch.jit.script
+# @torch.jit.script
 def _compute_step_return(
     *,
     ## Time
@@ -520,22 +532,22 @@ def _compute_step_return(
 
     ## Contacts
     contact_forces_mean_robot = contact_forces_robot.mean(dim=1)
-    contact_forces_mean_end_effector = (
+    contact_forces_mean_end_effector = (  # 平均
         contact_forces_end_effector.mean(dim=1)
         if contact_forces_end_effector is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
-    contact_forces_mean_end_effector_collision = (
+    contact_forces_mean_end_effector_collision = ( # 末端执行器与物体碰撞的平均接触力，可能是一个重要的指标，过大可能表示过于粗暴的接触，过小可能表示没有有效接触
         contact_forces_end_effector_collision.mean(dim=1)
         if contact_forces_end_effector_collision is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
-    contact_forces_end_effector = (
+    contact_forces_end_effector = ( # 末端执行器的接触力矩阵，包含每个接触点的力和位置等信息，可以用于更细粒度的奖励设计，例如鼓励在特定位置产生接触力，或者惩罚过大的接触力
         contact_forces_end_effector
         if contact_forces_end_effector is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
-    contact_forces_end_effector_collision = (
+    contact_forces_end_effector_collision = ( # 末端执行器与物体碰撞的接触力矩阵，包含每个碰撞接触点的力和位置等信息，可以用于分析碰撞质量，或者设计基于碰撞的奖励，例如鼓励在物体上产生稳定的接触力分布
         contact_forces_end_effector_collision
         if contact_forces_end_effector_collision is not None
         else torch.empty((num_envs, 0), dtype=dtype, device=device)
@@ -555,8 +567,7 @@ def _compute_step_return(
     MAX_JOINT_TORQUE_PENALTY = -4.0
     # joint_torque_clipped = torch.clamp(joint_applied_torque_robot, -50.0, 50.0)
     penalty_joint_torque = torch.clamp_min(
-        WEIGHT_JOINT_TORQUE
-        * torch.sum(torch.square(joint_applied_torque_robot), dim=1),
+        WEIGHT_JOINT_TORQUE * torch.sum(torch.square(joint_applied_torque_robot), dim=1),
         min=MAX_JOINT_TORQUE_PENALTY,
     ) # 加大关节扭矩惩罚权重，并设置最大惩罚值，鼓励更节能的动作
 
@@ -579,7 +590,7 @@ def _compute_step_return(
     # Penalty: End-effector too close to / below terrain surface
     GROUND_CLEARANCE_MARGIN = 0.015
     ground_clearance_violation = height_above_terrain < GROUND_CLEARANCE_MARGIN
-    penalty_end_effector_ground_clearance = -2.0 * ground_clearance_violation.to(dtype=dtype)
+    penalty_end_effector_ground_clearance = -20.0 * ground_clearance_violation.to(dtype=dtype)
 
     # Penalty: Time (鼓励快速完成任务)
     WEIGHT_TIME_PENALTY = -0.005
@@ -628,19 +639,18 @@ def _compute_step_return(
     reward_pregrasp_ready = WEIGHT_PREGRASP_READY * pregrasp_ready.to(dtype=dtype)
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 40
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 4
     TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
-    # dist_ee_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
-    # dist_ee_obj = torch.clamp(dist_ee_obj, 0.0, 10.0)
+
     distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
-        0.8 - torch.tanh(
+        1 - torch.tanh(
             distance_to_obj / TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0 * 40
-    THRESHOLD_GRASP = 2.5
+    WEIGHT_GRASP = 4.0 *  40
+    THRESHOLD_GRASP = 1.5 
     contact_force_sample_mean = (
         torch.mean(
             torch.max(torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1)[0],
@@ -651,14 +661,14 @@ def _compute_step_return(
     )
     stable_grasp = (
         (contact_force_sample_mean > THRESHOLD_GRASP)
-        & (distance_xy_to_obj < 0.05)
-        & (height_above_obj > -0.03)
-        & (height_above_obj < 0.10)
+        & (distance_xy_to_obj <  0.05 )
+        & (height_above_obj > -0.05 )
+        & (height_above_obj < 0.15 )
     )
-    transport_ready = stable_grasp & (obj_lift_height > 0.06)
+    transport_ready = stable_grasp & (obj_lift_height > 0.05)
     reward_grasp = WEIGHT_GRASP * stable_grasp.to(dtype=dtype)
 
-    WEIGHT_GRASP_STABILITY = 3.0 * 40
+    WEIGHT_GRASP_STABILITY = 3.0 * 4
     reward_grasp_stability = (
         WEIGHT_GRASP_STABILITY
         * stable_grasp.to(dtype=dtype)
@@ -677,42 +687,42 @@ def _compute_step_return(
         (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION)
         & ~stable_grasp
     )
-    penalty_end_effector_collision = -2.0 * undesired_end_effector_collision.to(dtype=dtype)
+    penalty_end_effector_collision = -20.0 * undesired_end_effector_collision.to(dtype=dtype)
 
     # ========== 稀疏成功奖励（新增） ==========
-    WEIGHT_SUCCESS = 20.0 * 40               # 成功奖励的权重
-    LIFT_HEIGHT_SUCCESS = 0.18           # 提起 18 cm 即视为成功，便于第二阶段更早收到稀疏正反馈
+    WEIGHT_SUCCESS = 20.0 * 4               # 成功奖励的权重
+    LIFT_HEIGHT_SUCCESS = 0.10 
     
     success = stable_grasp & (obj_lift_height > LIFT_HEIGHT_SUCCESS)
     reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
 
 
     # Reward: Lift object
-    WEIGHT_LIFT = 6.0 * 40
-    reward_lift = (
-        WEIGHT_LIFT
-        * stable_grasp.to(dtype=dtype)
-        * torch.tanh(obj_lift_height / 0.12)
-    )
+    # WEIGHT_LIFT = 6.0 * (50 if stage == 2 else 40)
+    # reward_lift = (
+    #     WEIGHT_LIFT
+    #     * stable_grasp.to(dtype=dtype)
+    #     * torch.tanh(obj_lift_height / 0.12)
+    # )
 
 
     # Reward: Distance | Object <--> Target
     WEIGHT_DISTANCE_OBJ_TO_TARGET = 32.0
-    TANH_STD_DISTANCE_OBJ_TO_TARGET = 0.2
-    reward_distance_obj_to_target = transport_ready.to(dtype=dtype) * WEIGHT_DISTANCE_OBJ_TO_TARGET * (
-        1.0 - torch.tanh(
-            distance_obj_to_target / TANH_STD_DISTANCE_OBJ_TO_TARGET
-        )
+    TANH_STD_DISTANCE_OBJ_TO_TARGET = 0.1
+    reward_distance_obj_to_target = (transport_ready.to(dtype=dtype)* WEIGHT_DISTANCE_OBJ_TO_TARGET
+        * (1.0 - torch.tanh(distance_obj_to_target / TANH_STD_DISTANCE_OBJ_TO_TARGET))
+        if stage > 1
+        else torch.zeros(num_envs, dtype=dtype, device=device)
     )
 
-    if stage > 1:
-        pregrasp_focus = (~stable_grasp).to(dtype=dtype)
-        reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
-        reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
-        reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
-        reward_distance_end_effector_to_obj = (
-            reward_distance_end_effector_to_obj * pregrasp_focus
-        ) # 第二阶段开始后，稳定抓取的环境不再获得末端执行器与物体距离的奖励，鼓励它们专注于保持稳定抓取和完成运输任务
+    # if stage > 1:
+    #     pregrasp_focus = (~stable_grasp).to(dtype=dtype)
+    #     reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
+    #     reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
+    #     reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
+    #     reward_distance_end_effector_to_obj = (
+    #         reward_distance_end_effector_to_obj * pregrasp_focus
+    #     ) # 第二阶段开始后，稳定抓取的环境不再获得末端执行器与物体距离的奖励，鼓励它们专注于保持稳定抓取和完成运输任务
 
     # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
@@ -726,7 +736,7 @@ def _compute_step_return(
     # distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
 
     # 1. 远距离闭合惩罚
-    far_close_penalty_weight = -1.0
+    far_close_penalty_weight = -0.25 if stage == 2 else -1.0
     far_close_penalty = far_close_penalty_weight * (
         gripper_closed
         & ((distance_xy_to_obj > 0.08) | (height_above_obj > 0.12))
@@ -735,7 +745,7 @@ def _compute_step_return(
     # 2. 虚抓惩罚：闭合但没有有效接触力（接触力 < 2.0 N）
     # 注意：contact_force_matrix_end_effector 可能为 None，需判空
     bad_grasp = gripper_closed & (contact_force_sample_mean < THRESHOLD_GRASP)
-    fake_grasp_penalty_weight = -0.5
+    fake_grasp_penalty_weight = -0.1 if stage == 2 else -0.5
     fake_grasp_penalty = fake_grasp_penalty_weight * bad_grasp.to(dtype=dtype)
 
     if stage <= 1:
@@ -743,8 +753,8 @@ def _compute_step_return(
         reward_success = 8.0 * success.to(dtype=dtype)
         reward_grasp = torch.zeros_like(reward_grasp)
         reward_grasp_stability = torch.zeros_like(reward_grasp_stability)
-        reward_lift = torch.zeros_like(reward_lift)
-        reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
+        # reward_lift = torch.zeros_like(reward_lift)
+        # reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
         far_close_penalty = torch.zeros_like(far_close_penalty)
         fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
 
@@ -824,7 +834,7 @@ def _compute_step_return(
             "reward_distance_end_effector_to_obj": reward_distance_end_effector_to_obj,
             "reward_grasp": reward_grasp,
             "reward_grasp_stability": reward_grasp_stability,
-            "reward_lift": reward_lift,
+            # "reward_lift": reward_lift,
             "reward_distance_obj_to_target": reward_distance_obj_to_target,
             "reward_success": reward_success,
             "far_close_penalty": far_close_penalty,
