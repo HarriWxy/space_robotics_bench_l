@@ -537,7 +537,7 @@ def _compute_step_return(
     ) # 加速度惩罚项,
 
     # Penalty: Undesired robot contacts
-    WEIGHT_UNDESIRED_ROBOT_CONTACTS = -1.0
+    WEIGHT_UNDESIRED_ROBOT_CONTACTS = -10.0
     THRESHOLD_UNDESIRED_ROBOT_CONTACTS = 10.0
     penalty_undesired_robot_contacts = WEIGHT_UNDESIRED_ROBOT_CONTACTS * (
         torch.max(torch.norm(contact_forces_robot, dim=-1), dim=1)[0]
@@ -545,7 +545,7 @@ def _compute_step_return(
     ) # 惩罚机器人与环境的过大接触力，鼓励更轻柔的操作
 
     # Penalty: End-effector too close to / below terrain surface
-    GROUND_CLEARANCE_MARGIN = 0.015
+    GROUND_CLEARANCE_MARGIN = 0.005
     ground_clearance_violation = height_above_terrain < GROUND_CLEARANCE_MARGIN
     penalty_end_effector_ground_clearance = -5.0 * ground_clearance_violation.to(dtype=dtype)
 
@@ -554,7 +554,7 @@ def _compute_step_return(
     penalty_time = WEIGHT_TIME_PENALTY * torch.ones(num_envs, dtype=dtype, device=device)
 
     # Reward: End-effector top-down orientation
-    WEIGHT_TOP_DOWN_ORIENTATION = 1.0 / 2
+    WEIGHT_TOP_DOWN_ORIENTATION = 1.0 
     TANH_STD_TOP_DOWN_ORIENTATION = 0.15
     top_down_alignment = torch.sum(
         fk_rotmat_end_effector[:, :, 2] * torch.tensor((0.0, 0.0, -1.0), device=device)
@@ -648,7 +648,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=dtype, device=device)
     )
     undesired_end_effector_collision = (
-        (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION)
+        (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION) # 过大的碰撞力可能表示末端执行器与地面或其他物体发生了不良碰撞
         & ~stable_grasp
     )
     penalty_end_effector_collision = -4.0 * undesired_end_effector_collision.to(dtype=dtype)
@@ -662,12 +662,12 @@ def _compute_step_return(
 
 
     # Reward: Lift object
-    WEIGHT_LIFT = 6.0 * (8 if stage == 2 else 40)
-    reward_lift = (
-        WEIGHT_LIFT
-        * stable_grasp.to(dtype=dtype)
-        * torch.tanh(obj_lift_height / (0.06 if stage == 2 else 0.12))
-    )
+    # WEIGHT_LIFT = 6.0 * (8 if stage == 2 else 40)
+    # reward_lift = (
+    #     WEIGHT_LIFT
+    #     * stable_grasp.to(dtype=dtype)
+    #     * torch.tanh(obj_lift_height / (0.06 if stage == 2 else 0.12))
+    # )
 
 
     # Reward: Distance | Object <--> Target
@@ -679,14 +679,14 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=dtype, device=device)
     )
 
-    if stage > 1:
-        pregrasp_focus = (~stable_grasp).to(dtype=dtype)
-        reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
-        reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
-        reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
-        reward_distance_end_effector_to_obj = (
-            reward_distance_end_effector_to_obj * pregrasp_focus
-        )
+    # if stage > 1:
+    #     pregrasp_focus = (~stable_grasp).to(dtype=dtype)
+    #     reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
+    #     reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
+    #     reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
+    #     reward_distance_end_effector_to_obj = (
+    #         reward_distance_end_effector_to_obj * pregrasp_focus
+    #     ) # 第二阶段开始后，稳定抓取的环境不再获得末端执行器与物体距离的奖励，鼓励它们专注于保持稳定抓取和完成运输任务
 
     # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
@@ -717,7 +717,7 @@ def _compute_step_return(
         reward_success = 8.0 * success.to(dtype=dtype)
         reward_grasp = torch.zeros_like(reward_grasp)
         reward_grasp_stability = torch.zeros_like(reward_grasp_stability)
-        reward_lift = torch.zeros_like(reward_lift)
+        # reward_lift = torch.zeros_like(reward_lift)
         reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
         far_close_penalty = torch.zeros_like(far_close_penalty)
         fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
@@ -798,7 +798,7 @@ def _compute_step_return(
             "reward_distance_end_effector_to_obj": reward_distance_end_effector_to_obj,
             "reward_grasp": reward_grasp,
             "reward_grasp_stability": reward_grasp_stability,
-            "reward_lift": reward_lift,
+            # "reward_lift": reward_lift,
             "reward_distance_obj_to_target": reward_distance_obj_to_target,
             "reward_success": reward_success,
             "far_close_penalty": far_close_penalty,
