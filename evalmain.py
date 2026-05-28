@@ -1,8 +1,34 @@
-from srb.__main__ import main
-
 import sys
+from pathlib import Path
+
+from srb.__main__ import main
+from srb.utils.cfg import last_logdir
+from srb.utils.path import SRB_LOGS_DIR
 
 # sys.path.append("D:\\Program Files\\Blender Foundation\\Blender 4.5")  # Add parent directory to sys.path to import impl.py
+
+
+def resolve_model_path() -> Path:
+    logdir = last_logdir(
+        env_id="sample_collection",
+        workflow="sbx_td3",
+        root=SRB_LOGS_DIR,
+        modification_time=True,
+    )
+
+    candidates = (
+        logdir.joinpath("ckpt", "srb-sample_collection.zip"),
+        logdir.joinpath("srb-sample_collection.zip"),
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(
+        f"Could not find a checkpoint zip under {logdir}. Checked: "
+        + ", ".join(candidate.as_posix() for candidate in candidates)
+    )
+
 
 def run_srb(argv):
     old_argv = sys.argv[:]
@@ -36,9 +62,10 @@ if __name__ == "__main__":
         "env.stage2_easy=True",
         "env.sim.device=cuda",
         "env.robot=ur5+robotiq_hand_e",
-        "--model=./logs/sample_collection/sbx_td3/20260527T210054/ckpt/srb-sample_collection.zip",
+        # "--model=./logs/sample_collection/sbx_td3/20260527T210054/ckpt/srb-sample_collection.zip",
         # "--headless",
         # "--continue_training",
+        f"--model={resolve_model_path().as_posix()}",
     ])
 
 
