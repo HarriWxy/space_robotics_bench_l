@@ -1087,7 +1087,12 @@ class RosInterface(InterfaceBase):
             self._env.sim.forward()
 
             if self._env.sim.has_rtx_sensors():
-                if self._env.cfg.rerender_on_reset:
+                rerender_count = (
+                    self._env.cfg.num_rerenders_on_reset
+                    if hasattr(self._env.cfg, "num_rerenders_on_reset")
+                    else int(getattr(self._env.cfg, "rerender_on_reset", False))
+                )
+                for _ in range(rerender_count):
                     self._env.sim.render()
                 if self._env.cfg.wait_for_textures:
                     while SimulationManager.assets_loading():

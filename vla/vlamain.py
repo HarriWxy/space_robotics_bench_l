@@ -106,6 +106,7 @@ def _build_srb_argv(args: argparse.Namespace, forwarded_args: Sequence[str]) -> 
         str(args.log_interval),
         "env.sample=primitive",
         "env.robot=ur5+robotiq_hand_e",
+        "--headless",
     ]
     if args.headless:
         argv.append("--headless")

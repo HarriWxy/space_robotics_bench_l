@@ -18,7 +18,7 @@ class VisualExtCfg:
     # Use a skydome for the environment
     skydome: Literal["low_res", "high_res"] | bool | None = True
     # Re-render frames on reset for visual observations
-    rerender_on_reset: bool = True
+    num_rerenders_on_reset: int = 1
     # Always disable debug visualization
     debug_vis: bool = False
 

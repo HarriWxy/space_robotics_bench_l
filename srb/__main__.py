@@ -30,7 +30,16 @@ if TYPE_CHECKING:
 def main():
     def impl(
         subcommand: Literal[
-            "agent", "real_agent", "list", "ls", "gui", "repl", "python", "docs", "test"
+            "agent",
+            "real_agent",
+            "vla",
+            "list",
+            "ls",
+            "gui",
+            "repl",
+            "python",
+            "docs",
+            "test",
         ],
         **kwargs,
     ):
@@ -44,6 +53,8 @@ def main():
                 run_agent(**kwargs)
             case "real_agent":
                 run_real_agent(**kwargs)
+            case "vla":
+                run_vla(**kwargs)
             case "ls" | "list":
                 list_registered(**kwargs)
             case "gui":
@@ -1239,6 +1250,45 @@ def _generate_real_agent_subprocess(env_id: str, forwarded_args: Sequence[str] =
             logging.warning(f"  - {env}: {reason}")
 
 
+### VLA ###
+def run_vla(
+    env_id: str,
+    config: str,
+    prompt: str,
+    host: str,
+    port: int,
+    seed: int,
+    device: str,
+    enable_cameras: bool,
+    max_steps: int,
+    replan_steps: int,
+    log_interval: int,
+    headless: bool,
+    hide_ui: bool,
+    forwarded_args: Sequence[str] = (),
+    **kwargs,
+):
+    from srb.integrations.openpi import run_vla_rollout
+
+    run_vla_rollout(
+        env_id=env_id,
+        config=config,
+        prompt=prompt,
+        host=host,
+        port=port,
+        seed=seed,
+        device=device,
+        enable_cameras=enable_cameras,
+        max_steps=max_steps,
+        replan_steps=replan_steps,
+        log_interval=log_interval,
+        headless=headless,
+        hide_ui=hide_ui,
+        forwarded_args=forwarded_args,
+        **kwargs,
+    )
+
+
 ### List ###
 def list_registered(
     category: str | Sequence[str], show_hidden: bool, forwarded_args: Sequence[str] = ()
@@ -1818,6 +1868,11 @@ def __wrap_env_in_performance_test(
 ### CLI ###
 def parse_cli_args() -> argparse.Namespace:
     env_choices = read_offline_srb_env_cache()
+    env_choices_with_namespace = (
+        tuple(dict.fromkeys((*env_choices, *(f"srb/{env}" for env in env_choices))))
+        if env_choices
+        else ()
+    )
     interface_choices = sorted(map(str, InterfaceType))
     teleop_device_choices = sorted(map(str, TeleopDeviceType))
     algo_choices = sorted(map(str, SupportedAlgo))
@@ -2029,10 +2084,82 @@ def parse_cli_args() -> argparse.Namespace:
         default=[str(Lang.PYTHON)],
     )
 
+    ## VLA subcommand
+    vla_parser = subparsers.add_parser(
+        "vla",
+        help="Roll out an OpenPI policy in an SRB environment"
+        + (
+            ""
+            if find_spec("openpi_client")
+            else ' (MISSING: "openpi_client" Python package)'
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    vla_group = vla_parser.add_argument_group("VLA")
+    vla_group.add_argument(
+        "--prompt",
+        help="Task prompt sent to the VLA policy server",
+        type=str,
+        default="collect the sample",
+    )
+    vla_group.add_argument(
+        "--host",
+        help="Hostname of the websocket VLA policy server",
+        type=str,
+        default="0.0.0.0",
+    )
+    vla_group.add_argument(
+        "--port",
+        help="Port of the websocket VLA policy server",
+        type=int,
+        default=8000,
+    )
+    vla_group.add_argument(
+        "--seed",
+        help="Random seed for the SRB environment",
+        type=int,
+        default=0,
+    )
+    vla_group.add_argument(
+        "--device",
+        help="Simulation device for the SRB environment",
+        type=str,
+        default="cuda:0",
+    )
+    vla_group.add_argument(
+        "--enable_cameras",
+        "--enable-cameras",
+        help="Force enable cameras even for non-visual environments",
+        action="store_true",
+        default=False,
+    )
+    vla_group.add_argument(
+        "--max_steps",
+        "--max-steps",
+        help="Maximum rollout steps",
+        type=int,
+        default=250,
+    )
+    vla_group.add_argument(
+        "--replan_steps",
+        "--replan-steps",
+        help="How many actions to consume from each policy chunk",
+        type=int,
+        default=4,
+    )
+    vla_group.add_argument(
+        "--log_interval",
+        "--log-interval",
+        help="Logging interval in environment steps",
+        type=int,
+        default=10,
+    )
+
     ## Simulation launcher args
     for _parser in (
         *agent_parsers_with_env,
         *repl_parsers,
+        vla_parser,
     ):
         launcher_group = _parser.add_argument_group("Launcher")
         launcher_group.add_argument(
@@ -2076,6 +2203,20 @@ def parse_cli_args() -> argparse.Namespace:
             default="",
         )
 
+    vla_environment_group = vla_parser.add_argument_group("Environment")
+    vla_environment_group.add_argument(
+        "-e",
+        "--env",
+        "--task",
+        "--env-id",
+        dest="env_id",
+        help="Name of the environment to select",
+        type=str,
+        action=AutoNamespaceTaskAction,
+        choices=env_choices_with_namespace,
+        required=True,
+    )
+
     ## Environment args
     for _parser in (
         *agent_parsers_with_env,
@@ -2106,6 +2247,7 @@ def parse_cli_args() -> argparse.Namespace:
         *agent_parsers_with_env,
         *real_agent_parsers_with_env,
         *real_env_gen_parsers,
+        vla_parser,
     ):
         config_group = _parser.add_argument_group("Config")
         config_group.add_argument(
