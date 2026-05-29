@@ -126,3 +126,155 @@ Hydra 是一个开源的 Python 框架，旨在简化复杂应用程序的配置
 [blog](https://www.cnblogs.com/azureology/p/17296787.html)
 
 pip install omniverse-kit --extra-index-url https://pypi.nvidia.com
+
+
+Optimized tool selection先定位动作空间定义和抓取任务用到的 action term，再确认每个输出维度是怎么映射到控制器的。
+
+Searched for regex `ActionCfg|action_space|gripper|BinaryJointPositionAction|JointPositionAction|DifferentialInverseKinematicsAction` (`**/srb/**`), 200 results
+
+Searched for regex `grasp|pick|lift|reach` (`**/srb/tasks/**`), 200 results
+
+Searched for text `train_stage2|stage2` (`**/*.py`), 47 results
+
+我已经定位到抓取任务的关键路径：stage2 的 sample_collection 任务里，动作向量前 6 维控制末端位姿，后面的维度在任务代码里被当作夹爪动作处理。接下来读训练入口和任务实现，把这个映射说清楚，并找最适合加限制的位置。
+
+Read [](file:///root/space_robotics_bench_l/train_stage2.py)
+
+Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#260-260), lines 260 to 360
+
+Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#760-760), lines 760 to 810
+
+下一步我在看这个任务到底挂了哪套机器人动作配置，因为维度语义最终由机器人 action group 决定，不是训练脚本本身决定。
+
+Searched for regex `ur5\+robotiq_hand_e|robotiq_hand_e|UR5` (`**/srb/**`), 16 results
+
+Searched for regex `class .*SampleCollection|SampleCollectionEnvCfg|sample_collection` (`**/srb/tasks/manipulation/sample_collection/**`), no results
+
+Searched for regex `DifferentialInverseKinematicsActionCfg|TaskSpaceAction|OperationalSpace|BinaryJointPositionActionCfg|JointPositionToLimitsActionCfg` (`**/srb/**`), 200 results
+
+Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#1-1), lines 1 to 140
+
+Read [](file:///root/space_robotics_bench_l/srb/assets/robot/manipulation/universal_robots.py#440-440), lines 440 to 540
+
+Read [](file:///root/space_robotics_bench_l/srb/assets/object/tool/robotiq.py)
+
+我已经确认你这条训练命令用的是 UR5 + Robotiq Hand-E。现在还差最后一块：系统是怎样把 UR5 的 6 维末端位姿控制和夹爪维度拼成一个总动作向量。
+
+Searched for regex `class SerialManipulator|end_effector.*actions|ActionGroup\(|JointPositionBoundedActionGroup|InverseKinematicsActionGroup` (`**/srb/**`), 141 results
+
+Searched for regex `single_action_space|detailed_action_space|action_terms|action_manager` (`**/srb/core/**`), 22 results
+
+Read [](file:///root/space_robotics_bench_l/srb/interfaces/interface/ros.py#400-400), lines 400 to 490
+
+Read [](file:///root/space_robotics_bench_l/srb/core/env/common/base/env_cfg.py#540-540), lines 540 to 810
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/term/manipulation/differential_ik.py)
+
+现在已经能确认拼接顺序了：机械臂 action term 先加入，主动末端执行器 action term 后加入，所以这个任务里一定是 “前 6 维 = UR5 末端位姿增量；后面维度 = Robotiq 夹爪”。我补一眼夹爪 action term 的具体维数和缩放方式。
+
+Searched for regex `class JointPositionToLimitsAction|JointPositionToLimitsActionCfg` (`**/srb/**`), 8 results
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/group/common/joint.py)
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/group/manipulation/task_space.py)
+
+Searched for regex `class JointPositionToLimitsAction\(|class EMAJointPositionToLimitsAction\(|rescale_to_limits` (`**/srb/core/action/**`), no results
+
+Searched for files matching `**/srb/core/action/**/*limits*.py`, no matches
+
+Searched for files matching `**/srb/core/action/**/*.py`, 26 matches
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/__init__.py)
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/action_group.py)
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/term/common/__init__.py)
+
+我再补精确锚点，主要是为了给你一个能直接改的落点，而不是泛泛建议。
+
+Searched for regex `processed_actions = actions|processed_actions\[:, 6:\]|far_close_penalty|fake_grasp_penalty|gripper_closed` (`**/srb/tasks/manipulation/sample_collection/task.py`), 23 results
+
+Searched for regex `self.actions = ActionGroup\(|map_cmd_to_action_fns.append\(|manipulator.end_effector.actions|setattr\(\s*self.actions,\s*f\"\{end_effector_name\}/` (`**/srb/core/env/common/base/env_cfg.py`), 8 results
+
+Read [](file:///root/space_robotics_bench_l/srb/assets/robot/manipulation/universal_robots.py#315-315), lines 315 to 390
+
+Searched for regex `class UR5\(|class UR5RobotiqHandE\(|actions: ActionGroup = InverseKinematicsActionGroup\(|scale=0.1` (`**/srb/assets/robot/manipulation/universal_robots.py`), 50 results
+
+Searched for regex `class RobotiqHandE\(|actions: ActionGroup = JointPositionBoundedActionGroup\(|joint_names=\["Slider_\[1-2\]"\]|rescale_to_limits=True` (`**/srb/assets/object/tool/robotiq.py`), 4 results
+
+Searched for regex `map_cmd_to_action\(self, twist: torch.Tensor, event: bool\)|return twist|return torch.Tensor\(\(-1.0 if event else 1.0,\)\)` (`**/srb/core/action/group/manipulation/task_space.py|srb/core/action/group/common/joint.py`), no results
+
+Searched for regex `def map_cmd_to_action|return twist|return twist\[:3\]` (`**/srb/core/action/group/manipulation/task_space.py`), 5 results
+
+Searched for regex `class JointPositionBoundedActionGroup|JointPositionToLimitsActionCfg|def map_cmd_to_action|return torch.Tensor` (`**/srb/core/action/group/common/joint.py`), 13 results
+
+Searched for regex `--env|env.robot=ur5\+robotiq_hand_e|env.stage=2|env.stage2_easy=True` (`**/train_stage2.py`), 4 results
+
+我已经能给出维度语义了。最后再补一条：当前动作空间是不是统一归一化到 [-1, 1]，以及哪种“限制某些维度”的方式最贴近你现在这套实现。
+
+Searched for regex `single_action_space = gymnasium.spaces.Box|shape=\(self.action_manager.total_action_dim,\)` (`**/srb/core/env/common/base/direct/impl.py`), 2 results
+
+Searched for regex `_map_action_term\(|msg.linear.x|msg.angular.x|BinaryJointPositionAction|Float32MultiArray` (`**/srb/interfaces/interface/ros.py`), 17 results
+
+Read [](file:///root/space_robotics_bench_l/srb/core/env/common/base/direct/impl.py#350-350), lines 350 to 375
+
+这里还有一个更关键的点：Robotiq 夹爪现在很可能是两维独立输出，但从抓取任务角度看，这两维通常是冗余的。这个地方如果改成单标量或强制同步，往往比只调奖励更直接。
+
+Searched for regex `top_down_alignment|rot6d|height_above_obj|distance_xy_to_obj` (`**/srb/tasks/manipulation/sample_collection/task.py`), 38 results
+
+Searched for regex `Slider_\[1-2\]|joint_pos_end_effector|gripper_aperture` (`**/srb/tasks/manipulation/sample_collection/task.py|srb/assets/object/tool/robotiq.py`), no results
+
+Read [](file:///root/space_robotics_bench_l/srb/core/action/term/common/scalar_joint_position.py)
+
+关键点确认了：仓库里已经有单标量夹爪 action term，可以把 Robotiq 从两维改成一维；对于抓取，这通常比保留两个独立 slider 输出更稳。
+
+Searched for regex `gripper_aperture|joint_pos_end_effector` (`**/srb/tasks/manipulation/sample_collection/task.py`), 19 results
+
+Searched for regex `class ScalarJointPositionAction|action_dim|open_command_expr|close_command_expr` (`**/srb/core/action/term/common/scalar_joint_position.py`), 5 results
+
+Searched for regex `top_down_alignment = torch.sum|PREGRASP_ALIGNMENT_THRESHOLD|reward_top_down_orientation` (`**/srb/tasks/manipulation/sample_collection/task.py`), 6 results
+
+Searched for regex `lateral_gate_threshold|upper_gate_threshold|min_close_scale|close_scale|close_action =|open_action =` (`**/srb/tasks/manipulation/sample_collection/task.py`), 13 results
+
+Searched for regex `joint_pos_end_effector_normalized =|gripper_aperture =|torch.mean\(joint_pos_end_effector_normalized` (`**/srb/tasks/manipulation/sample_collection/task.py`), 4 results
+
+Searched for text `command_type="pose"|use_relative_mode=True|ik_method="dls"` (`**/srb/assets/robot/manipulation/universal_robots.py`), 30 results
+
+**维度含义**
+
+对你当前这条训练配置 train_stage2.py，动作向量按代码应当理解为 8 维：
+
+1. 第 0 维：末端执行器 TCP 在 x 方向的相对平移
+2. 第 1 维：末端执行器 TCP 在 y 方向的相对平移
+3. 第 2 维：末端执行器 TCP 在 z 方向的相对平移
+4. 第 3 维：绕 x 轴的相对旋转增量
+5. 第 4 维：绕 y 轴的相对旋转增量
+6. 第 5 维：绕 z 轴的相对旋转增量
+7. 第 6 维：Robotiq 第一个滑块关节的开合命令
+8. 第 7 维：Robotiq 第二个滑块关节的开合命令
+
+依据是这几处：
+
+- UR5 机械臂动作是相对位姿的 Differential IK，配置在 universal_robots.py
+- 这个 IK action group 对 pose 命令直接返回 6 维 twist，也就是平移 3 维加旋转 3 维，见 task_space.py
+- Robotiq Hand-E 的动作是对两个 Slider 关节做 bounded position command，见 robotiq.py
+- 环境组装动作时，先把机械臂 action term 加进去，再把末端执行器 action term 追加进去，所以顺序就是前 6 维机械臂、后 2 维夹爪，见 env_cfg.py 和 env_cfg.py
+- 整个动作空间统一是 [-1, 1] 的归一化 Box，见 impl.py
+
+**能不能限制某些维度**
+
+可以，而且你这套任务里其实已经在这么做了。抓取任务在进入物理步前，会对第 6 维之后的夹爪闭合动作做状态相关缩放：离物体太远、太高时，闭合会被压小；另外还有远距离闭合惩罚和虚抓惩罚，见 task.py 和 task.py。
+
+如果目标是更有效地学抓取，我建议优先这样做：
+
+1. 把第 6-7 维夹爪动作强制同步成一个值。现在 Robotiq 实际给了两维，但任务里连抓爪开度观测都在对两指取平均，见 task.py。对抓取来说，这两维大多是冗余自由度，会增加探索难度。
+2. 明显压小第 3-4 维，甚至直接冻结。这个任务奖励明确鼓励 top-down alignment，见 task.py。如果你的抓取主要是俯抓，roll 和 pitch 往往是干扰项。常见做法是只保留 xyz 和少量 yaw。
+3. 把夹爪闭合从现在的软门控，改成更硬的门控。也就是只有当末端已经进入预抓取窗口时，才允许负向夹爪动作；否则只允许保持或张开。
+
+如果要从结构上进一步减维，这个仓库里其实已经有单标量夹爪 action term，可直接把 Robotiq 从两维改成一维，见 scalar_joint_position.py。不过对你现在这套实验，最省事的做法不是改资产定义，而是在 task.py 里先做动作预处理：同步夹爪两维，再缩小第 3-5 维。
+
+如果你要，我可以直接帮你做其中一种修改：
+
+1. 只保留 xyz + yaw + 单一夹爪动作
+2. 保留 6 维机械臂，但把夹爪两维强制同步
+3. 在现有基础上把夹爪闭合改成硬门控，专门强化抓取阶段

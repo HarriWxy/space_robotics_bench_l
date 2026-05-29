@@ -60,6 +60,8 @@ def select_sample(
         case AssetVariant.PRIMITIVE:
             pose_range["z"] = (0.1, 0.1)
             sample_cfg = assets.RandomShape(scale=scale).asset_cfg
+            sample_cfg.spawn.shapes = ("cuboid",)
+            sample_cfg.spawn.random_choice = False
 
         case AssetVariant.DATASET:
             match env_cfg.domain:

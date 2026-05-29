@@ -25,6 +25,7 @@ from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.core.sim import PreviewSurfaceCfg, SphereCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import (
+    deg_to_rad,
     matrix_from_quat,
     rotmat_to_rot6d,
     scale_transform,
@@ -77,6 +78,7 @@ class TaskCfg(ManipulationEnvCfg):
 
     ## Curriculum
     stage: int = 1  # 1: pre-grasp, 2: grasp + lift, 3: full sample collection
+    stage2_easy: bool = False
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.5, 0.0, 0.75)
@@ -106,6 +108,23 @@ class TaskCfg(ManipulationEnvCfg):
         self.events.randomize_object_state.params["pose_range"] = (
             sample.state_randomizer.params["pose_range"]
         )
+
+        if self.stage == 2 and self.stage2_easy:
+            pose_range = dict(self.events.randomize_object_state.params["pose_range"])
+            pose_range.update(
+                {
+                    "x": (-0.05, 0.05),
+                    "y": (-0.05, 0.05),
+                    "roll": (0.0, 0.0),
+                    "pitch": (0.0, 0.0),
+                    "yaw": (-torch.pi / 6, torch.pi / 6),
+                }
+            )
+            self.events.randomize_object_state.params["pose_range"] = pose_range
+            self.events.randomize_robot_joints.params["position_range"] = (
+                -deg_to_rad(1.0),
+                deg_to_rad(1.0),
+            )
 
         # Sensor: End-effector contacts
         if isinstance(self.scene.contacts_end_effector, ContactSensorCfg):
@@ -151,6 +170,8 @@ class Task(ManipulationEnv):
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
         env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if len(env_ids_tensor) == 0:
+            return
         root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
         root_quat = self._obj.data.root_quat_w[env_ids_tensor].clone()
         baseline_pose = root_pose.clone()
@@ -166,65 +187,91 @@ class Task(ManipulationEnv):
             baseline_pose[:, 2] = terrain_heights + 0.03  # 将物体初始位置设置在地形表面以上一定高度，避免穿透地形或过高导致难以抓取
             root_pose[:, 2] = baseline_pose[:, 2]
 
-        if self.cfg.stage > 1 and len(env_ids_tensor) > 0: # 仅在第二阶段及以上进行预抓取位置的随机化
-            # tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
+        if self.cfg.stage > 1: # 仅在第二阶段及以上进行预抓取位置的随机化
+            tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
             curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device) # 为每个环境生成一个随机数，用于决定是进入预抓取位置、运输位置，还是保持初始位置
-            # pregrasp_mask = curriculum_mix < 0.80 
-            # transport_mask = torch.zeros_like(pregrasp_mask) # 第二阶段不进行运输位置的随机化
-            pregrasp_mask = curriculum_mix < 0.75  # 第二阶段主要是预抓取位置的随机化，少量运输位置的随机化
-            transport_mask = (curriculum_mix >= 0.75) & (curriculum_mix < 0.95)
+            if self.cfg.stage == 2 and self.cfg.stage2_easy:
+                pregrasp_mask = curriculum_mix < 0.95
+                transport_mask = torch.zeros_like(pregrasp_mask)
+            else:
+                pregrasp_mask = curriculum_mix < 0.75  # 第二阶段主要是预抓取位置的随机化，少量运输位置的随机化
+                transport_mask = (curriculum_mix >= 0.75) & (curriculum_mix < 0.95)
 
-            # if pregrasp_mask.any():
-            #     pregrasp_pose = root_pose[pregrasp_mask].clone()
-            #     pregrasp_pose[:, :2] = (
-            #         tf_pos_end_effector[pregrasp_mask, :2]
-            #         + (0.006 if self.cfg.stage == 2 else 0.008)
-            #         * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
-            #     )
-            #     if terrain_prim_path is not None: # 如果有地形信息，则将预抓取位置的高度调整到地形表面以上一定距离，避免末端执行器初始位置过低导致穿透地形或过高导致难以抓取
-            #         pregrasp_heights = terrain_surface_heights(
-            #             terrain_prim_path,
-            #             pregrasp_pose,
-            #             self.scene.env_origins,
-            #             env_ids_tensor[pregrasp_mask],
-            #         )
-            #         pregrasp_pose[:, 2] = torch.maximum(
-            #             pregrasp_heights + (0.045 if self.cfg.stage == 2 else 0.05),
-            #             tf_pos_end_effector[pregrasp_mask, 2] - (0.04 if self.cfg.stage == 2 else 0.05),
-            #         )
-            #     else:
-            #         pregrasp_pose[:, 2] = (
-            #             tf_pos_end_effector[pregrasp_mask, 2]
-            #             - (0.04 if self.cfg.stage == 2 else 0.07)
-            #         )
-            #     root_pose[pregrasp_mask] = pregrasp_pose
+            if pregrasp_mask.any():
+                pregrasp_pose = root_pose[pregrasp_mask].clone()
+                pregrasp_pose[:, :2] = (
+                    tf_pos_end_effector[pregrasp_mask, :2]
+                    + (
+                        0.003
+                        if self.cfg.stage == 2 and self.cfg.stage2_easy
+                        else (0.006 if self.cfg.stage == 2 else 0.008)
+                    )
+                    * torch.randn_like(tf_pos_end_effector[pregrasp_mask, :2])
+                )
+                if terrain_prim_path is not None:
+                    pregrasp_heights = terrain_surface_heights(
+                        terrain_prim_path,
+                        pregrasp_pose,
+                        self.scene.env_origins,
+                        env_ids_tensor[pregrasp_mask],
+                    )
+                    pregrasp_pose[:, 2] = torch.maximum(
+                        pregrasp_heights
+                        + (
+                            0.05
+                            if self.cfg.stage == 2 and self.cfg.stage2_easy
+                            else (0.045 if self.cfg.stage == 2 else 0.05)
+                        ),
+                        tf_pos_end_effector[pregrasp_mask, 2]
+                        - (
+                            0.03
+                            if self.cfg.stage == 2 and self.cfg.stage2_easy
+                            else (0.04 if self.cfg.stage == 2 else 0.05)
+                        ),
+                    )
+                else:
+                    pregrasp_pose[:, 2] = (
+                        tf_pos_end_effector[pregrasp_mask, 2]
+                        - (
+                            0.03
+                            if self.cfg.stage == 2 and self.cfg.stage2_easy
+                            else (0.04 if self.cfg.stage == 2 else 0.07)
+                        )
+                    )
+                # root_pose[pregrasp_mask] = pregrasp_pose
 
-            # if transport_mask.any():
-            #     transport_pose = root_pose[transport_mask].clone()
-            #     transport_pose[:, :2] = (
-            #         tf_pos_end_effector[transport_mask, :2]
-            #         + 0.006 * torch.randn_like(tf_pos_end_effector[transport_mask, :2])
-            #     )
-            #     if terrain_prim_path is not None:
-            #         transport_heights = terrain_surface_heights(
-            #             terrain_prim_path,
-            #             transport_pose,
-            #             self.scene.env_origins,
-            #             env_ids_tensor[transport_mask],
-            #         )
-            #         transport_pose[:, 2] = torch.maximum(
-            #             transport_heights + 0.14,
-            #             tf_pos_end_effector[transport_mask, 2] - 0.04,
-            #         )
-            #     else:
-            #         transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
+            if transport_mask.any():
+                transport_pose = root_pose[transport_mask].clone()
+                transport_pose[:, :2] = (
+                    tf_pos_end_effector[transport_mask, :2]
+                    + 0.006 * torch.randn_like(tf_pos_end_effector[transport_mask, :2])
+                )
+                if terrain_prim_path is not None:
+                    transport_heights = terrain_surface_heights(
+                        terrain_prim_path,
+                        transport_pose,
+                        self.scene.env_origins,
+                        env_ids_tensor[transport_mask],
+                    )
+                    transport_pose[:, 2] = torch.maximum(
+                        transport_heights + 0.14,
+                        tf_pos_end_effector[transport_mask, 2] - 0.04,
+                    )
+                else:
+                    transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
                 # root_pose[transport_mask] = transport_pose
+
+            baseline_pose = root_pose.clone()
 
             if isinstance(self._end_effector, Articulation):
                 end_effector_joint_pos = self._end_effector.data.default_joint_pos[env_ids_tensor].clone()
                 end_effector_joint_vel = self._end_effector.data.default_joint_vel[env_ids_tensor].clone()
                 if pregrasp_mask.any():
-                    end_effector_joint_pos[pregrasp_mask] = -0.004
+                    end_effector_joint_pos[pregrasp_mask] = (
+                        -0.002
+                        if self.cfg.stage == 2 and self.cfg.stage2_easy
+                        else -0.004
+                    )
                 if transport_mask.any():
                     end_effector_joint_pos[transport_mask] = -0.014
                 self._end_effector.write_joint_state_to_sim(
@@ -260,9 +307,13 @@ class Task(ManipulationEnv):
                     tf_pos_obj[:, :2] - tf_pos_end_effector[:, :2], dim=1
                 )
                 height_above_obj = tf_pos_end_effector[:, 2] - tf_pos_obj[:, 2]
-                lateral_gate_threshold = 0.12 
+                lateral_gate_threshold = (
+                    0.18 if self.cfg.stage == 2 and self.cfg.stage2_easy else 0.12
+                )
                 lower_gate = torch.clamp((height_above_obj + 0.04) / 0.08, 0.0, 1.0)
-                upper_gate_threshold = 0.2 
+                upper_gate_threshold = (
+                    0.24 if self.cfg.stage == 2 and self.cfg.stage2_easy else 0.2
+                )
                 lateral_gate = torch.clamp(  # 当末端执行器在物体上方且水平距离较近时，允许夹爪闭合；否则逐渐限制夹爪闭合，鼓励智能体先将末端执行器移动到物体上方再进行闭合
                     (lateral_gate_threshold - distance_xy_to_obj)
                     / lateral_gate_threshold, 0.0, 1.0,
@@ -270,7 +321,12 @@ class Task(ManipulationEnv):
                 upper_gate = torch.clamp(  # 当末端执行器高度过高时，限制夹爪闭合，鼓励智能体先降低末端执行器高度再进行闭合
                     (upper_gate_threshold - height_above_obj) / upper_gate_threshold, 0.0, 1.0,
                 )
-                close_scale = (0.35 if self.cfg.stage == 2 else 0.15) + 0.65 * lateral_gate * lower_gate * upper_gate
+                min_close_scale = (
+                    0.7
+                    if self.cfg.stage == 2 and self.cfg.stage2_easy
+                    else (0.35 if self.cfg.stage == 2 else 0.15)
+                )
+                close_scale = min_close_scale + (1.0 - min_close_scale) * lateral_gate * lower_gate * upper_gate
                 close_action = torch.clamp_min(-gripper_actions, 0.0)
                 open_action = torch.clamp_min(gripper_actions, 0.0)
                 processed_actions[:, 6:] = open_action - close_action * close_scale.unsqueeze(-1)
@@ -283,6 +339,7 @@ class Task(ManipulationEnv):
             max_episode_length=self.max_episode_length,
             truncate_episodes=self.cfg.truncate_episodes,
             stage=self.cfg.stage,
+            stage2_easy=self.cfg.stage2_easy,
             ## Actions
             act_current=self.action_manager.action,
             act_previous=self.action_manager.prev_action,
@@ -358,6 +415,7 @@ def _compute_step_return(
     max_episode_length: int,
     truncate_episodes: bool,
     stage: int,
+    stage2_easy: bool,
     ## Actions
     act_current: torch.Tensor,
     act_previous: torch.Tensor,
@@ -394,6 +452,7 @@ def _compute_step_return(
     num_envs = episode_length.size(0)
     dtype = tf_pos_end_effector.dtype
     device = episode_length.device
+    stage2_easy_active = stage2_easy and stage == 2
 
     # # ====================== 稳定化：NaN/inf 清理 ======================
     # joint_pos_robot = torch.nan_to_num(joint_pos_robot, nan=0.0, posinf=0.0, neginf=0.0)
@@ -545,9 +604,12 @@ def _compute_step_return(
     ) # 惩罚机器人与环境的过大接触力，鼓励更轻柔的操作
 
     # Penalty: End-effector too close to / below terrain surface
-    GROUND_CLEARANCE_MARGIN = 0.005
+    GROUND_CLEARANCE_MARGIN = 0.002 if stage2_easy_active else 0.005
     ground_clearance_violation = height_above_terrain < GROUND_CLEARANCE_MARGIN
-    penalty_end_effector_ground_clearance = -5.0 * ground_clearance_violation.to(dtype=dtype)
+    penalty_end_effector_ground_clearance = (
+        (-2.0 if stage2_easy_active else -5.0)
+        * ground_clearance_violation.to(dtype=dtype)
+    )
 
     # Penalty: Time (鼓励快速完成任务)
     WEIGHT_TIME_PENALTY = -0.005
@@ -566,10 +628,10 @@ def _compute_step_return(
     ) # 鼓励末端执行器保持向下的姿态，便于抓取物体
 
     # Reward: Pre-grasp alignment
-    PREGRASP_HEIGHT_OFFSET = 0.08
-    PREGRASP_ALIGNMENT_THRESHOLD = 0.85
-    PREGRASP_XY_THRESHOLD = 0.03
-    PREGRASP_HEIGHT_THRESHOLD = 0.03
+    PREGRASP_HEIGHT_OFFSET = 0.07 if stage2_easy_active else 0.08
+    PREGRASP_ALIGNMENT_THRESHOLD = 0.75 if stage2_easy_active else 0.85
+    PREGRASP_XY_THRESHOLD = 0.045 if stage2_easy_active else 0.03
+    PREGRASP_HEIGHT_THRESHOLD = 0.04 if stage2_easy_active else 0.03
     delta_pos_end_effector_to_obj_world = tf_pos_obj - tf_pos_end_effector
     distance_xy_to_obj = torch.norm(delta_pos_end_effector_to_obj_world[:, :2], dim=-1)
     height_above_obj = tf_pos_end_effector[:, 2] - tf_pos_obj[:, 2]
@@ -580,24 +642,24 @@ def _compute_step_return(
         & (top_down_alignment > PREGRASP_ALIGNMENT_THRESHOLD)
     )
 
-    WEIGHT_LATERAL_ALIGNMENT = 4.0 * 10  / stage
-    TANH_STD_LATERAL_ALIGNMENT = 0.08
+    WEIGHT_LATERAL_ALIGNMENT = 4.8 if stage2_easy_active else 4.0 
+    TANH_STD_LATERAL_ALIGNMENT = 0.1 if stage2_easy_active else 0.08
     reward_lateral_alignment = WEIGHT_LATERAL_ALIGNMENT * (
         1.0 - torch.tanh(distance_xy_to_obj / TANH_STD_LATERAL_ALIGNMENT)
     ) # 鼓励末端执行器与物体在 XY 平面上的对齐
 
-    WEIGHT_PREGRASP_HEIGHT = 3.0
-    TANH_STD_PREGRASP_HEIGHT = 0.04
+    WEIGHT_PREGRASP_HEIGHT = 4.0 if stage2_easy_active else 3.0
+    TANH_STD_PREGRASP_HEIGHT = 0.05 if stage2_easy_active else 0.04
     reward_pregrasp_height = WEIGHT_PREGRASP_HEIGHT * (
         1.0 - torch.tanh(pregrasp_height_error / TANH_STD_PREGRASP_HEIGHT)
     )
 
-    WEIGHT_PREGRASP_READY = 2.0
+    WEIGHT_PREGRASP_READY = 10.0 if stage2_easy_active else 2.0
     reward_pregrasp_ready = WEIGHT_PREGRASP_READY * pregrasp_ready.to(dtype=dtype)
 
     # Reward: Distance | End-effector <--> Object
-    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 2.5 * 4
-    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.2
+    WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ = 8.0 if stage2_easy_active else 2.5 * 2
+    TANH_STD_DISTANCE_END_EFFECTOR_TO_OBJ = 0.1 
 
     distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
     reward_distance_end_effector_to_obj = WEIGHT_DISTANCE_END_EFFECTOR_TO_OBJ * (
@@ -606,8 +668,8 @@ def _compute_step_return(
         )) # 鼓励末端执行器接近物体
 
     # Reward: Grasp object
-    WEIGHT_GRASP = 4.0 * 40
-    THRESHOLD_GRASP = 1.5
+    WEIGHT_GRASP = 64.0 if stage2_easy_active else 4.0 * 40
+    THRESHOLD_GRASP = 1.0 if stage2_easy_active else 1.5
     contact_force_sample_mean = (
         torch.mean(
             torch.max(torch.norm(contact_force_matrix_end_effector, dim=-1), dim=-1)[0],
@@ -618,13 +680,25 @@ def _compute_step_return(
     )
     stable_grasp = (
         (contact_force_sample_mean > THRESHOLD_GRASP)
-        & (distance_xy_to_obj < 0.05)
-        & (height_above_obj > -0.05)
-        & (height_above_obj < 0.15)
+        & (distance_xy_to_obj < (0.06 if stage2_easy_active else 0.05))
+        & (height_above_obj > (-0.06 if stage2_easy_active else -0.05))
+        & (height_above_obj < (0.18 if stage2_easy_active else 0.15))
     )
     transport_ready = stable_grasp & (obj_lift_height > 0.05)
-    grasp_xy_gate = torch.clamp((0.08 - distance_xy_to_obj) / 0.08, 0.0, 1.0)
-    grasp_height_gate = torch.clamp((0.18 - torch.abs(height_above_obj - 0.03)) / 0.18, 0.0, 1.0)
+    grasp_xy_span = 0.10 if stage2_easy_active else 0.08
+    grasp_xy_gate = torch.clamp(
+        (grasp_xy_span - distance_xy_to_obj) / grasp_xy_span,
+        0.0,
+        1.0,
+    )
+    grasp_height_target = 0.04 if stage2_easy_active else 0.03
+    grasp_height_span = 0.22 if stage2_easy_active else 0.18
+    grasp_height_gate = torch.clamp(
+        (grasp_height_span - torch.abs(height_above_obj - grasp_height_target))
+        / grasp_height_span,
+        0.0,
+        1.0,
+    )
     reward_grasp = (
         WEIGHT_GRASP
         * torch.tanh(contact_force_sample_mean / THRESHOLD_GRASP)
@@ -632,7 +706,7 @@ def _compute_step_return(
         * grasp_height_gate
     )
 
-    WEIGHT_GRASP_STABILITY = 3.0 * 4
+    WEIGHT_GRASP_STABILITY = 18.0 if stage2_easy_active else 3.0 * 4
     reward_grasp_stability = (
         WEIGHT_GRASP_STABILITY
         * stable_grasp.to(dtype=dtype)
@@ -651,23 +725,29 @@ def _compute_step_return(
         (collision_force_max_end_effector > THRESHOLD_END_EFFECTOR_COLLISION) # 过大的碰撞力可能表示末端执行器与地面或其他物体发生了不良碰撞
         & ~stable_grasp
     )
-    penalty_end_effector_collision = -4.0 * undesired_end_effector_collision.to(dtype=dtype)
+    penalty_end_effector_collision = (
+        (-2.0 if stage2_easy_active else -4.0)
+        * undesired_end_effector_collision.to(dtype=dtype)
+    )
 
     # ========== 稀疏成功奖励（新增） ==========
     WEIGHT_SUCCESS = 20.0 * 4               # 成功奖励的权重
-    LIFT_HEIGHT_SUCCESS = 0.10 
+    LIFT_HEIGHT_SUCCESS = 0.04 if stage2_easy_active else 0.10
     
     success = stable_grasp & (obj_lift_height > LIFT_HEIGHT_SUCCESS)
     reward_success = WEIGHT_SUCCESS * success.to(dtype=dtype)
 
 
     # Reward: Lift object
-    # WEIGHT_LIFT = 6.0 * (8 if stage == 2 else 40)
-    # reward_lift = (
-    #     WEIGHT_LIFT
-    #     * stable_grasp.to(dtype=dtype)
-    #     * torch.tanh(obj_lift_height / (0.06 if stage == 2 else 0.12))
-    # )
+    WEIGHT_LIFT = 48.0 if stage2_easy_active else 6.0 * (8 if stage == 2 else 40)
+    reward_lift = (
+        WEIGHT_LIFT
+        * stable_grasp.to(dtype=dtype)
+        * torch.tanh(
+            obj_lift_height
+            / (0.04 if stage2_easy_active else (0.06 if stage == 2 else 0.12))
+        )
+    )
 
 
     # Reward: Distance | Object <--> Target
@@ -679,14 +759,14 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=dtype, device=device)
     )
 
-    # if stage > 1:
-    #     pregrasp_focus = (~stable_grasp).to(dtype=dtype)
-    #     reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
-    #     reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
-    #     reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
-    #     reward_distance_end_effector_to_obj = (
-    #         reward_distance_end_effector_to_obj * pregrasp_focus
-    #     ) # 第二阶段开始后，稳定抓取的环境不再获得末端执行器与物体距离的奖励，鼓励它们专注于保持稳定抓取和完成运输任务
+    if stage2_easy_active:
+        pregrasp_focus = (~stable_grasp).to(dtype=dtype)
+        reward_lateral_alignment = reward_lateral_alignment * pregrasp_focus
+        reward_pregrasp_height = reward_pregrasp_height * pregrasp_focus
+        reward_pregrasp_ready = reward_pregrasp_ready * pregrasp_focus
+        reward_distance_end_effector_to_obj = (
+            reward_distance_end_effector_to_obj * pregrasp_focus
+        )
 
     # ========== 新增惩罚项 ==========
     # 获取夹爪动作（假设动作向量最后一维为夹爪，维度 > 6）
@@ -700,7 +780,9 @@ def _compute_step_return(
     # distance_to_obj = torch.norm(tf_pos_end_effector_to_obj, dim=-1)
 
     # 1. 远距离闭合惩罚
-    far_close_penalty_weight = -0.25 if stage == 2 else -1.0
+    far_close_penalty_weight = (
+        0.0 if stage2_easy_active else (-0.25 if stage == 2 else -1.0)
+    )
     far_close_penalty = far_close_penalty_weight * (
         gripper_closed
         & ((distance_xy_to_obj > 0.08) | (height_above_obj > 0.12))
@@ -709,7 +791,9 @@ def _compute_step_return(
     # 2. 虚抓惩罚：闭合但没有有效接触力（接触力 < 2.0 N）
     # 注意：contact_force_matrix_end_effector 可能为 None，需判空
     bad_grasp = gripper_closed & (contact_force_sample_mean < THRESHOLD_GRASP)
-    fake_grasp_penalty_weight = -0.1 if stage == 2 else -0.5
+    fake_grasp_penalty_weight = (
+        -0.02 if stage2_easy_active else (-0.1 if stage == 2 else -0.5)
+    )
     fake_grasp_penalty = fake_grasp_penalty_weight * bad_grasp.to(dtype=dtype)
 
     if stage <= 1:
@@ -717,7 +801,7 @@ def _compute_step_return(
         reward_success = 8.0 * success.to(dtype=dtype)
         reward_grasp = torch.zeros_like(reward_grasp)
         reward_grasp_stability = torch.zeros_like(reward_grasp_stability)
-        # reward_lift = torch.zeros_like(reward_lift)
+        reward_lift = torch.zeros_like(reward_lift)
         reward_distance_obj_to_target = torch.zeros_like(reward_distance_obj_to_target)
         far_close_penalty = torch.zeros_like(far_close_penalty)
         fake_grasp_penalty = torch.zeros_like(fake_grasp_penalty)
@@ -739,30 +823,32 @@ def _compute_step_return(
         if truncate_episodes
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
+    # if reward_pregrasp_ready.mean().item()>1:
+    #     pass
 
     return StepReturn(
         {
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,
                 "contact_forces_mean_end_effector": contact_forces_mean_end_effector,
-                "contact_forces_mean_end_effector_collision": contact_forces_mean_end_effector_collision,
-                "height_above_terrain": height_above_terrain.unsqueeze(-1),
-                "distance_xy_end_effector_to_obj": distance_xy_to_obj.unsqueeze(-1),
-                "height_above_obj": height_above_obj.unsqueeze(-1),
-                "sample_lift_height": obj_lift_height.unsqueeze(-1),
-                "distance_obj_to_target": distance_obj_to_target.unsqueeze(-1),
-                "sample_lin_speed": obj_lin_speed.unsqueeze(-1),
-                "sample_ang_speed": obj_ang_speed.unsqueeze(-1),
-                "gripper_aperture": gripper_aperture.unsqueeze(-1),
+                # "contact_forces_mean_end_effector_collision": contact_forces_mean_end_effector_collision,
+                # "height_above_terrain": height_above_terrain.unsqueeze(-1),
+                # "distance_xy_end_effector_to_obj": distance_xy_to_obj.unsqueeze(-1),
+                # "height_above_obj": height_above_obj.unsqueeze(-1),
+                # "sample_lift_height": obj_lift_height.unsqueeze(-1),
+                # "distance_obj_to_target": distance_obj_to_target.unsqueeze(-1),
+                # "sample_lin_speed": obj_lin_speed.unsqueeze(-1),
+                # "sample_ang_speed": obj_ang_speed.unsqueeze(-1),
+                # "gripper_aperture": gripper_aperture.unsqueeze(-1),
                 "tf_pos_end_effector_to_obj": tf_pos_end_effector_to_obj,
                 "tf_rot6d_end_effector_to_obj": tf_rot6d_end_effector_to_obj,
                 "tf_pos_obj_to_target": tf_pos_obj_to_target,
                 "tf_rot6d_obj_to_target": tf_rot6d_obj_to_target,
-                "stable_grasp": stable_grasp.float().unsqueeze(-1),
-                "transport_ready": transport_ready.float().unsqueeze(-1),
-                "end_effector_collision_force_max": collision_force_max_end_effector.unsqueeze(-1),
-                "end_effector_collision_undesired": undesired_end_effector_collision.float().unsqueeze(-1),
-                "pregrasp_ready": pregrasp_ready.float().unsqueeze(-1),
+                # "stable_grasp": stable_grasp.float().unsqueeze(-1),
+                # "transport_ready": transport_ready.float().unsqueeze(-1),
+                # "end_effector_collision_force_max": collision_force_max_end_effector.unsqueeze(-1),
+                # "end_effector_collision_undesired": undesired_end_effector_collision.float().unsqueeze(-1),
+                # "pregrasp_ready": pregrasp_ready.float().unsqueeze(-1),
                 "success": success.float().unsqueeze(-1),
             },
             "state_dyn": {
@@ -798,7 +884,7 @@ def _compute_step_return(
             "reward_distance_end_effector_to_obj": reward_distance_end_effector_to_obj,
             "reward_grasp": reward_grasp,
             "reward_grasp_stability": reward_grasp_stability,
-            # "reward_lift": reward_lift,
+            "reward_lift": reward_lift,
             "reward_distance_obj_to_target": reward_distance_obj_to_target,
             "reward_success": reward_success,
             "far_close_penalty": far_close_penalty,

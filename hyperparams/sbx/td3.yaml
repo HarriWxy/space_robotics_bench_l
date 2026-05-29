@@ -1,4 +1,4 @@
-n_timesteps: 100000000
+n_timesteps: 20000000
 policy: "MlpPolicy"
 batch_size: 512
 buffer_size: 5000000
@@ -12,5 +12,5 @@ noise_type: "normal"
 tau: 0.005
 train_freq: 1
 policy_kwargs: "dict(
-  net_arch=[384, 384],
+  net_arch=[256, 256, 64],
   )"
