@@ -43,7 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("SRB_VLA_PORT", "8000")),
+        default=int(os.environ.get("SRB_VLA_PORT", "8899")),
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -106,7 +106,7 @@ def _build_srb_argv(args: argparse.Namespace, forwarded_args: Sequence[str]) -> 
         str(args.log_interval),
         "env.sample=primitive",
         "env.robot=ur5+robotiq_hand_e",
-        "--headless",
+        # "--headless",
     ]
     if args.headless:
         argv.append("--headless")

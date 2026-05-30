@@ -7,6 +7,7 @@ from typing import Any, Dict, Mapping, Sequence
 
 import gymnasium
 import numpy as np
+import torch
 
 
 def _to_numpy(value) -> np.ndarray:
@@ -149,6 +150,7 @@ def run_vla_rollout(
 
                 obs, _ = env.reset()
                 action_plan: collections.deque[np.ndarray] = collections.deque()
+                episode_idx = 0
 
                 for step in range(max_steps):
                     if not action_plan:
@@ -174,8 +176,13 @@ def run_vla_rollout(
                     low = np.asarray(env.unwrapped.single_action_space.low, dtype=np.float32)
                     high = np.asarray(env.unwrapped.single_action_space.high, dtype=np.float32)
                     action = np.clip(action, low, high)
+                    action_tensor = torch.as_tensor(
+                        action[None, ...],
+                        device=env.unwrapped.device,
+                        dtype=torch.float32,
+                    )
 
-                    obs, reward, terminated, truncated, _ = env.step(action[None, ...])
+                    obs, reward, terminated, truncated, _ = env.step(action_tensor)
 
                     if step % max(1, log_interval) == 0:
                         logging.info(
@@ -187,8 +194,14 @@ def run_vla_rollout(
                         )
 
                     if _to_bool(terminated) or _to_bool(truncated):
-                        logging.info("Episode finished at step %d", step)
-                        break
+                        logging.info(
+                            "Episode %d finished at step %d; resetting environment",
+                            episode_idx,
+                            step,
+                        )
+                        obs, _ = env.reset()
+                        action_plan.clear()
+                        episode_idx += 1
             finally:
                 env.close()
 

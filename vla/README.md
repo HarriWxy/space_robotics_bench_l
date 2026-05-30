@@ -2,6 +2,8 @@
 
 这个目录把 ACoT-VLA / OpenPI 的标准 VLA 推理与训练流程接到了 Space Robotics Bench。
 
+ACoT-VLA 项目地址在: `/root/algos/R2A/Algos/ACoT-VLA_saa`
+
 ## 已接入的内容
 
 - `src/openpi/policies/srb_policy.py`
@@ -40,7 +42,7 @@ uv run python -m srb vla \
   --env srb/sample_collection_visual \
   --prompt "collect the sample" \
   --host 0.0.0.0 \
-  --port 8000 \
+  --port 8899 \
   --device cuda:0
 ```
 
