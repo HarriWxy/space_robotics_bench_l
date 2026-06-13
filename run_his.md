@@ -126,3 +126,6 @@ Hydra 是一个开源的 Python 框架，旨在简化复杂应用程序的配置
 [blog](https://www.cnblogs.com/azureology/p/17296787.html)
 
 pip install omniverse-kit --extra-index-url https://pypi.nvidia.com
+
+from openpi_client import websocket_client_policy as w; c=w.WebsocketClientPolicy('0.0.0.0', 8899); r=c.infer({'prompt':'collect the sample'}); import numpy as np; a=np.asarray(r['actions']); print(type(r), a.shape, a.dtype)
+

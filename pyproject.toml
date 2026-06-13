@@ -8,7 +8,7 @@ ignore_missing_imports = true
 
 [project]
 name = "srb"
-version = "0.0.6"
+version = "0.0.6.1"
 description = "Robot Learning Beyond Earth"
 authors = [{ name = "Andrej Orsula", email = "orsula.andrej@gmail.com" }]
 maintainers = [{ name = "Andrej Orsula", email = "orsula.andrej@gmail.com" }]
@@ -26,7 +26,7 @@ license = { text = "MIT OR Apache-2.0" }
 requires-python = "==3.11.*"
 dependencies = [
   ## Core
-  "gymnasium~=0.29",
+  "gymnasium~=1.3.0",
   # "isaaclab~=2.0",
   "oxidasim~=0.1",
   ## Assets

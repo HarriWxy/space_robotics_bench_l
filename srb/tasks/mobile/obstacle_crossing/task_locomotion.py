@@ -5,13 +5,20 @@ import torch
 
 from srb import assets
 from srb._typing import StepReturn
-from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
+from srb.core.asset import AssetVariant, Humanoid, LeggedRobot, RigidObjectCfg
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import push_by_setting_velocity  # noqa: F401
 from srb.core.mdp import reset_joints_by_scale
 from srb.core.sensor import ContactSensor, ContactSensorCfg
+from srb.core.sim import UsdFileCfg, CollisionPropertiesCfg, RigidBodyPropertiesCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
+from srb.utils.nucleus import ISAACLAB_NUCLEUS_DIR
+from srb.utils.math import (
+    matrix_from_quat,
+    rotmat_to_rot6d,
+    scale_transform,
+    subtract_frame_transforms,
+)
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
 
@@ -21,17 +28,29 @@ from .task import EventCfg, SceneCfg, Task, TaskCfg
 
 
 @configclass
-class LocomotionSceneCfg(SceneCfg):
+class ObstacleCrossingSceneCfg(SceneCfg):
     contacts_robot: ContactSensorCfg = ContactSensorCfg(
         prim_path=MISSING,  # type: ignore
         update_period=0.0,
         history_length=3,
         track_air_time=True,
     )
+    
+    ## Fixed obstacles (Wall/Trench)
+    wall: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/wall",
+        spawn=UsdFileCfg(
+            usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Props/Industrial/Box/box.usd", # Using a box as a wall proxy
+            collision_props=CollisionPropertiesCfg(collision_enabled=True),
+            rigid_props=RigidBodyPropertiesCfg(max_linear_velocity=0.0, max_angular_velocity=0.0),
+        ),
+    )
+
+    ## Random rocks will be spawned in the Task __init__ or via a helper
 
 
 @configclass
-class LocomotionEventCfg(EventCfg):
+class ObstacleCrossingEventCfg(EventCfg):
     randomize_robot_joints: EventTermCfg = EventTermCfg(
         func=reset_joints_by_scale,
         mode="reset",
@@ -41,40 +60,22 @@ class LocomotionEventCfg(EventCfg):
             "velocity_range": (0.0, 0.0),
         },
     )
-    # push_robot: EventTermCfg = EventTermCfg(
-    #     func=push_by_setting_velocity,
-    #     mode="interval",
-    #     interval_range_s=(10.0, 15.0),
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "velocity_range": {
-    #             "x": (-0.5, 0.5),
-    #             "y": (-0.5, 0.5),
-    #         },
-    #     },
-    # )
 
 
 @configclass
-class LocomotionTaskCfg(TaskCfg):
+class ObstacleCrossingTaskCfg(TaskCfg):
     ## Assets
-    robot: LeggedRobot | Humanoid | AssetVariant = assets.Spot()
+    robot: LeggedRobot | Humanoid | AssetVariant = assets.UnitreeG1()
     _robot: LeggedRobot = MISSING  # type: ignore
 
     ## Scene
-    scene: LocomotionSceneCfg = LocomotionSceneCfg()
+    scene: ObstacleCrossingSceneCfg = ObstacleCrossingSceneCfg()
 
     ## Events
-    events: LocomotionEventCfg = LocomotionEventCfg()
+    events: ObstacleCrossingEventCfg = ObstacleCrossingEventCfg()
 
     ## Time
     env_rate: float = 1.0 / 125.0
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        # Sensor: Robot contacts
-        self.scene.contacts_robot.prim_path = f"{self.scene.robot.prim_path}/.*"
 
 
 ############
@@ -82,16 +83,16 @@ class LocomotionTaskCfg(TaskCfg):
 ############
 
 
-class LocomotionTask(Task):
-    cfg: LocomotionTaskCfg
+class ObstacleCrossingTask(Task):
+    cfg: ObstacleCrossingTaskCfg
 
-    def __init__(self, cfg: LocomotionTaskCfg, **kwargs):
+    def __init__(self, cfg: ObstacleCrossingTaskCfg, **kwargs):
         super().__init__(cfg, **kwargs)
 
         ## Get scene assets
         self._contacts_robot: ContactSensor = self.scene["contacts_robot"]
 
-        ## Cache metrics
+        ## Cache metrics for contact detection (feet vs body)
         self._feet_indices, _ = self._robot.find_bodies(
             self.cfg._robot.regex_feet_links
         )
@@ -104,9 +105,12 @@ class LocomotionTask(Task):
         super()._reset_idx(env_ids)
 
     def extract_step_return(self) -> StepReturn:
-        if self.cfg.command_vis or self.cfg.debug_vis:
-            self._update_visualization_markers()
+        ## Visualize target
+        self._target_marker.visualize(self._goal[:, :3], self._goal[:, 3:])
 
+        _robot_pose = self._robot.data.root_link_pose_w
+        
+        # Compute reward and termination logic here (simplified for template)
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -116,34 +120,17 @@ class LocomotionTask(Task):
             act_current=self.action_manager.action,
             act_previous=self.action_manager.prev_action,
             ## States
-            # Root
-            tf_quat_robot=self._robot.data.root_quat_w,
+            tf_pos_robot=_robot_pose[:, 0:3],
+            tf_quat_robot=_robot_pose[:, 3:7],
             vel_lin_robot=self._robot.data.root_lin_vel_b,
             vel_ang_robot=self._robot.data.root_ang_vel_b,
             projected_gravity_robot=self._robot.data.projected_gravity_b,
-            # Joints
+            tf_pos_target=self._goal[:, 0:3],
+            tf_quat_target=self._goal[:, 3:7],
             joint_pos_robot=self._robot.data.joint_pos,
-            joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
-                else None
-            ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
-            # Contacts
             contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
-            contact_last_air_time=self._contacts_robot.data.last_air_time,  # type: ignore
-            # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
-            ## Robot descriptors
-            robot_feet_indices=self._feet_indices,
-            robot_undesired_contact_body_indices=self._undesired_contact_body_indices,
-            ## Command
-            command=self._command,
         )
-
 
 @torch.jit.script
 def _compute_step_return(
@@ -180,7 +167,6 @@ def _compute_step_return(
     command: torch.Tensor,
 ) -> StepReturn:
     num_envs = episode_length.size(0)
-    # dtype = episode_length.dtype
     device = episode_length.device
 
     ############
@@ -329,16 +315,16 @@ def _compute_step_return(
             },
         },
         {
-            "pen_action_rate": penalty_action_rate,
-            "pen_joint_torque": penalty_joint_torque,
-            "pen_joint_acceleration": penalty_joint_acceleration,
-            "pen_und_robot_contacts": penalty_undesired_robot_contacts,
+            "penalty_action_rate": penalty_action_rate,
+            "penalty_joint_torque": penalty_joint_torque,
+            "penalty_joint_acceleration": penalty_joint_acceleration,
+            "penalty_undesired_robot_contacts": penalty_undesired_robot_contacts,
             "reward_cmd_lin_vel_xy": reward_cmd_lin_vel_xy,
             "reward_cmd_ang_vel_z": reward_cmd_ang_vel_z,
             "reward_feet_air_time": reward_feet_air_time,
-            "pen_und_lin_vel_z": penalty_undesired_lin_vel_z,
-            "pen_und_ang_vel_xy": penalty_undesired_ang_vel_xy,
-            "pen_gravity_rot_ali": penalty_gravity_rotation_alignment,
+            "penalty_undesired_lin_vel_z": penalty_undesired_lin_vel_z,
+            "penalty_undesired_ang_vel_xy": penalty_undesired_ang_vel_xy,
+            "penalty_gravity_rotation_alignment": penalty_gravity_rotation_alignment,
         },
         termination,
         truncation,

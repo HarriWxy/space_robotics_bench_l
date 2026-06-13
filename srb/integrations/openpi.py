@@ -1,6 +1,7 @@
 import collections
 import os
 import sys
+import time
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
@@ -144,66 +145,97 @@ def run_vla_rollout(
             env_cfg.sim.device = device
 
             env = gymnasium.make(id=env_id, cfg=env_cfg)
-            try:
-                client = _websocket_client_policy.WebsocketClientPolicy(host, port)
-                logging.info("Server metadata: %s", client.get_server_metadata())
 
-                obs, _ = env.reset()
-                action_plan: collections.deque[np.ndarray] = collections.deque()
-                episode_idx = 0
+            # ── 同步重连推理循环（不使用 asyncio，避免与 Isaac Sim 事件循环冲突）─
+            while True:
+                try:
+                    # 1. 建立/重连 WebSocket
+                    logging.info("Connecting to VLA server %s:%d ...", host, port)
+                    client = _websocket_client_policy.WebsocketClientPolicy(host, port)
+                    logging.info("Server metadata: %s", client.get_server_metadata())
 
-                for step in range(max_steps):
-                    if not action_plan:
-                        result = client.infer(_prepare_request(obs, prompt))
-                        action_chunk = np.asarray(result["actions"], dtype=np.float32)
-                        if action_chunk.ndim != 2:
+                    # 2. 初始化环境状态
+                    obs, _ = env.reset()
+                    action_plan: collections.deque[np.ndarray] = collections.deque()
+                    episode_idx = 0
+                    step = 0
+
+                    # 3. 推理循环
+                    while step < max_steps:
+                        if not action_plan:
+                            obs["done"] = False
+                            result = client.infer(_prepare_request(obs, prompt))
+                            action_chunk = np.asarray(result["actions"], dtype=np.float32)
+                            if action_chunk.ndim != 2:
+                                raise ValueError(
+                                    f"Expected action chunk with 2 dims, got {action_chunk.shape}"
+                                )
+                            if len(action_chunk) < replan_steps:
+                                raise ValueError(
+                                    f"Need at least {replan_steps} planned actions, got {len(action_chunk)}"
+                                )
+                            action_plan.extend(action_chunk[:replan_steps])
+
+                        action = np.asarray(action_plan.popleft(), dtype=np.float32)
+                        expected_action_dim = int(env.unwrapped.single_action_space.shape[0])
+                        if action.shape[-1] != expected_action_dim:
                             raise ValueError(
-                                f"Expected action chunk with 2 dims, got {action_chunk.shape}"
+                                f"Policy produced action dim {action.shape[-1]}, but SRB env expects {expected_action_dim}. "
+                                "Update SRBDataConfig.action_dim to match the environment action space."
                             )
-                        if len(action_chunk) < replan_steps:
-                            raise ValueError(
-                                f"Need at least {replan_steps} planned actions, got {len(action_chunk)}"
+                        low = np.asarray(env.unwrapped.single_action_space.low, dtype=np.float32)
+                        high = np.asarray(env.unwrapped.single_action_space.high, dtype=np.float32)
+                        action = np.clip(action, low, high)
+                        action_tensor = torch.as_tensor(
+                            action[None, ...],
+                            device=env.unwrapped.device,
+                            dtype=torch.float32,
+                        )
+
+                        obs, reward, terminated, truncated, _ = env.step(action_tensor)
+
+                        if step % max(1, log_interval) == 0:
+                            logging.info(
+                                "step=%d reward=%.4f terminated=%s truncated=%s",
+                                step,
+                                float(np.asarray(_to_numpy(reward)).reshape(-1)[0]),
+                                _to_bool(terminated),
+                                _to_bool(truncated),
                             )
-                        action_plan.extend(action_chunk[:replan_steps])
 
-                    action = np.asarray(action_plan.popleft(), dtype=np.float32)
-                    expected_action_dim = int(env.unwrapped.single_action_space.shape[0])
-                    if action.shape[-1] != expected_action_dim:
-                        raise ValueError(
-                            f"Policy produced action dim {action.shape[-1]}, but SRB env expects {expected_action_dim}. "
-                            "Update SRBDataConfig.action_dim to match the environment action space."
-                        )
-                    low = np.asarray(env.unwrapped.single_action_space.low, dtype=np.float32)
-                    high = np.asarray(env.unwrapped.single_action_space.high, dtype=np.float32)
-                    action = np.clip(action, low, high)
-                    action_tensor = torch.as_tensor(
-                        action[None, ...],
-                        device=env.unwrapped.device,
-                        dtype=torch.float32,
-                    )
+                        if _to_bool(terminated) or _to_bool(truncated):
+                            logging.info(
+                                "Episode %d finished at step %d; resetting environment",
+                                episode_idx,
+                                step,
+                            )
 
-                    obs, reward, terminated, truncated, _ = env.step(action_tensor)
+                            obs["done"] = True
+                            result = client.infer(_prepare_request(obs, prompt))
 
-                    if step % max(1, log_interval) == 0:
-                        logging.info(
-                            "step=%d reward=%.4f terminated=%s truncated=%s",
-                            step,
-                            float(np.asarray(_to_numpy(reward)).reshape(-1)[0]),
-                            _to_bool(terminated),
-                            _to_bool(truncated),
-                        )
+                            obs, _ = env.reset()
+                            action_plan.clear()
+                            episode_idx += 1
 
-                    if _to_bool(terminated) or _to_bool(truncated):
-                        logging.info(
-                            "Episode %d finished at step %d; resetting environment",
-                            episode_idx,
-                            step,
-                        )
-                        obs, _ = env.reset()
-                        action_plan.clear()
-                        episode_idx += 1
-            finally:
-                env.close()
+                        step += 1
+
+                    logging.info("Reached max_steps=%d, stopping.", max_steps)
+                    obs["done"] = True
+                    client.infer(_prepare_request(obs, prompt))
+                    break  # 正常结束
+
+                except KeyboardInterrupt:
+                    obs["done"] = True
+                    client.infer(_prepare_request(obs, prompt))
+                    logging.info("Interrupted by user.")
+                    break
+
+                except Exception as e:
+                    logging.warning("Connection lost or error: %s — reconnecting in 5s...", e)
+                    time.sleep(1)
+
+            # finally:
+            env.close()
 
         hydra_main()
     finally:

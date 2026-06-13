@@ -39,7 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="collect the sample",
         help="Prompt sent to the VLA policy server.",
     )
-    parser.add_argument("--host", default=os.environ.get("SRB_VLA_HOST", "0.0.0.0"))
+    parser.add_argument("--host", default=os.environ.get("SRB_VLA_HOST", "192.168.1.116")) # 0.0.0.0
     parser.add_argument(
         "--port",
         type=int,
@@ -51,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("SRB_VLA_DEVICE", "cuda:0"),
     )
     parser.add_argument("--cfg", default="DEFAULT")
-    parser.add_argument("--max-steps", type=int, default=250)
+    parser.add_argument("--max-steps", type=int, default=2500)
     parser.add_argument("--replan-steps", type=int, default=4)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument(
@@ -105,8 +105,12 @@ def _build_srb_argv(args: argparse.Namespace, forwarded_args: Sequence[str]) -> 
         "--log-interval",
         str(args.log_interval),
         "env.sample=primitive",
-        "env.robot=ur5+robotiq_hand_e",
+        # "env.robot=ur5+robotiq_hand_e",
+        "env.camera_data_types=[rgb]",
+        "env.camera_resolution=[224,224]",
         # "--headless",
+        # "--video"
+        "--livestream=2",
     ]
     if args.headless:
         argv.append("--headless")

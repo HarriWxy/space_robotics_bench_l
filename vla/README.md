@@ -41,10 +41,12 @@ uv run python -m srb vla \
   --headless \
   --env srb/sample_collection_visual \
   --prompt "collect the sample" \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 8899 \
   --device cuda:0
 ```
+
+如果 policy server 不在本机，把 `127.0.0.1` 换成服务端的实际 IP。`0.0.0.0` 只适合服务端绑定监听，不适合客户端连接。
 
 也可以继续执行 `python vla/main.py ...`。该脚本现在会直接转发到同一个 `python -m srb vla` 入口，避免再维护一套单独的启动链路。
 
