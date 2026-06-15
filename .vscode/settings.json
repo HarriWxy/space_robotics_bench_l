@@ -4,6 +4,7 @@
     },
     "python.defaultInterpreterPath": "~/isaac-sim/kit/python/bin/python3",
     "python.analysis.extraPaths": [
+        "/root/PolicyFlow_srb/policyflow",
         "../isaaclab/source/isaaclab",
         "../isaaclab/source/isaaclab_assets",
         "../isaaclab/source/isaaclab_mimic",

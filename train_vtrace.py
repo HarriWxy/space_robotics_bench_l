@@ -19,7 +19,7 @@ if __name__ == "__main__":
         # "eval",
         # "rand",
         "--algo",
-        "sb3_td3",
+        "policyflow",
         "--env",
         "velocity_tracking",
         # "--cfg",

@@ -894,6 +894,10 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.sbx import main as sbx
 
             sbx.run(workflow=WORKFLOW, algo=algo.removeprefix("sbx_"), **kwargs)
+        case _pf if algo.startswith("policyflow"):
+            from srb.integrations.pflow import main as policyflow
+
+            policyflow.run(workflow=WORKFLOW, **kwargs)
 
 
 def eval_agent(algo: str, **kwargs):
@@ -916,6 +920,10 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.sbx import main as sbx
 
             sbx.run(workflow=WORKFLOW, algo=algo.removeprefix("sbx_"), **kwargs)
+        case _pf if algo.startswith("policyflow"):
+            from srb.integrations.pflow import main as policyflow
+
+            policyflow.run(workflow=WORKFLOW, **kwargs)
 
 
 ### Sim-to-Real ###
@@ -2590,6 +2598,9 @@ class SupportedAlgo(str, Enum):
     SKRL_SAC = auto()
     SKRL_TD3 = auto()
     SKRL_TRPO = auto()
+
+    # PolicyFlow
+    POLICYFLOW = auto()
 
     def __str__(self) -> str:
         return self.name.lower()

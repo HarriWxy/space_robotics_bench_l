@@ -57,6 +57,7 @@ algo = [
   "srb[sbx]",
   "srb[skrl]",
   "srb[robomimic]",
+  "srb[policyflow]",
 ]
 dreamer = [
   #
@@ -85,6 +86,11 @@ skrl = [
 robomimic = [
   #
   # "robomimic@git+https://github.com/ARISE-Initiative/robomimic.git@TODO",
+]
+policyflow = [
+  #
+  # Install PolicyFlow from local repo: cd ~/PolicyFlow_srb/policyflow && pip install -e .
+  "einops~=0.6",
 ]
 ## Hardware
 hw = [
