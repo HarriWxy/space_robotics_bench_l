@@ -11,9 +11,9 @@ critic_obs_len: 1
 actor_obs_len: 1
 
 actor_hidden_dims: [512, 256, 128]
-actor_activations: ["elu", "elu", "elu", "linear"]
+actor_activations: ["mish", "mish", "mish", "linear"]
 critic_hidden_dims: [512, 256, 128]
-critic_activations: ["elu", "elu", "elu", "linear"]
+critic_activations: ["mish", "mish", "mish", "linear"]
 
 ### Agent ###
 desired_kl: 0.01
@@ -21,7 +21,7 @@ learning_rate: 1.0e-4
 discount_factor: 0.99
 lam: 0.95
 time_limit_bootstrap: true
-mini_batches: 64
+mini_batches: 256
 learning_epochs: 5
 gaussian_entropy_loss_scale: 0.01
 brownian_reg_loss_scale: 0.01

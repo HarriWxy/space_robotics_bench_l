@@ -19,9 +19,9 @@ if __name__ == "__main__":
         # "eval",
         # "rand",
         "--algo",
-        "policyflow",
+        "policyflow", # 
         "--env",
-        "velocity_tracking",
+        "locomotion_velocity_tracking",
         # "--cfg",
         # "IGNORE",
         "env.domain=moon",

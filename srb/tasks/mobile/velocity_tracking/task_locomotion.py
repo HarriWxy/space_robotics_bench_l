@@ -107,6 +107,19 @@ class LocomotionTask(Task):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
+        # Sanitize IMU data to prevent NaN propagation
+        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize velocity data
+        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize projected gravity
+        # projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize joint data
+        # joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_applied_torque_robot = torch.nan_to_num(self._robot.data.applied_torque, nan=0.0, posinf=0.0, neginf=0.0)
+
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -118,6 +131,7 @@ class LocomotionTask(Task):
             ## States
             # Root
             tf_quat_robot=self._robot.data.root_quat_w,
+            tf_pos_robot=self._robot.data.root_pos_w,
             vel_lin_robot=self._robot.data.root_lin_vel_b,
             vel_ang_robot=self._robot.data.root_ang_vel_b,
             projected_gravity_robot=self._robot.data.projected_gravity_b,
@@ -158,6 +172,7 @@ def _compute_step_return(
     ## States
     # Root
     tf_quat_robot: torch.Tensor,
+    tf_pos_robot: torch.Tensor,
     vel_lin_robot: torch.Tensor,
     vel_ang_robot: torch.Tensor,
     projected_gravity_robot: torch.Tensor,
@@ -187,6 +202,13 @@ def _compute_step_return(
     ## States ##
     ############
     ## Root
+    # # Sanitize quaternion before conversion to prevent NaN propagation
+    # tf_quat_robot = torch.nan_to_num(tf_quat_robot, nan=0.0)
+    # tf_quat_robot = torch.where(
+    #     torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1e-6,
+    #     torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+    #     tf_quat_robot,
+    # )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
     tf_rot6d_robot = rotmat_to_rot6d(tf_rotmat_robot)
 
@@ -294,8 +316,15 @@ def _compute_step_return(
     ##################
     ## Terminations ##
     ##################
-    # No termination condition
-    termination = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    # Termination: Robot has fallen (body height too low)
+    # G1 init height is ~0.74m, terminate if below 0.3m
+    termination_fallen = tf_pos_robot[:, 2] < 0.3
+    # Termination: Bad orientation (robot flipped or severely tilted)
+    # z-axis of rotation matrix is the body's up direction in world frame
+    body_up_z = tf_rotmat_robot[:, 2, 2]  # cos(tilt angle)
+    termination_bad_orientation = body_up_z < 0.3  # tilted more than ~70 degrees
+
+    termination = termination_fallen | termination_bad_orientation
     # Truncation
     truncation = (
         episode_length >= max_episode_length

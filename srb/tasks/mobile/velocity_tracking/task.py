@@ -4,12 +4,12 @@ import torch
 
 from srb._typing import StepReturn
 from srb.core.env import GroundEnv, GroundEnvCfg, GroundEventCfg, GroundSceneCfg
-from srb.core.manager import EventTermCfg
+from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import ARROW_CFG, VisualizationMarkers
-from srb.core.mdp import randomize_command
+from srb.core.mdp import randomize_command, reset_root_state_uniform
 from srb.core.sim import PreviewSurfaceCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d
+from srb.utils.math import deg_to_rad, matrix_from_quat, rotmat_to_rot6d
 
 ##############
 ### Config ###
@@ -23,6 +23,28 @@ class SceneCfg(GroundSceneCfg):
 
 @configclass
 class EventCfg(GroundEventCfg):
+    randomize_robot_state: EventTermCfg = EventTermCfg(
+        func=reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "pose_range": {
+                "x": (-0.25, 0.25),
+                "y": (-0.25, 0.25),
+                "z": (0.0, 0.1),
+                "yaw": (-torch.pi, torch.pi),
+            },
+            "velocity_range": {
+                "x": (-0.1, 0.1),
+                "y": (-0.1, 0.1),
+                "z": (0.0, 0.1),
+                "roll": (-deg_to_rad(2.0), deg_to_rad(2.0)),
+                "pitch": (-deg_to_rad(2.0), deg_to_rad(2.0)),
+                "yaw": (-deg_to_rad(5.0), deg_to_rad(5.0)),
+            },
+        },
+    )
+
     command = EventTermCfg(
         func=randomize_command,
         mode="interval",
@@ -44,7 +66,7 @@ class TaskCfg(GroundEnvCfg):
     events: EventCfg = EventCfg()
 
     ## Time
-    episode_length_s: float = 20.0
+    episode_length_s: float = 200.0
     is_finite_horizon: bool = False
 
     ## Visualization
@@ -205,6 +227,30 @@ class Task(GroundEnv):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
+        # === NaN 调试检测 ===
+        _raw_data = {
+            "root_quat_w": self._robot.data.root_quat_w,
+            "root_lin_vel_b": self._robot.data.root_lin_vel_b,
+            "root_ang_vel_b": self._robot.data.root_ang_vel_b,
+            "root_pos_w": self._robot.data.root_pos_w,
+            "imu_lin_acc_b": self._imu_robot.data.lin_acc_b,
+            "imu_ang_vel_b": self._imu_robot.data.ang_vel_b,
+            "command": self._command,
+        }
+        for _name, _tensor in _raw_data.items():
+            _nan_count = torch.isnan(_tensor).sum().item()
+            _inf_count = torch.isinf(_tensor).sum().item()
+            if _nan_count > 0 or _inf_count > 0:
+                _nan_envs = torch.any(torch.isnan(_tensor).reshape(_tensor.shape[0], -1), dim=1).nonzero(as_tuple=True)[0]
+                print(f"[NaN DEBUG] {_name}: {_nan_count} NaN, {_inf_count} Inf | bad_envs={_nan_envs[:10].tolist()} | sample={_tensor[_nan_envs[0]].tolist() if len(_nan_envs) > 0 else 'N/A'}")
+
+        # # Sanitize IMU data to prevent NaN propagation
+        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize velocity data
+        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -216,6 +262,7 @@ class Task(GroundEnv):
             ## States
             # Root
             tf_quat_robot=self._robot.data.root_quat_w,
+            tf_pos_robot=self._robot.data.root_pos_w,
             vel_lin_robot=self._robot.data.root_lin_vel_b,
             vel_ang_robot=self._robot.data.root_ang_vel_b,
             # IMU
@@ -239,6 +286,7 @@ def _compute_step_return(
     ## States
     # Root
     tf_quat_robot: torch.Tensor,
+    tf_pos_robot: torch.Tensor,
     vel_lin_robot: torch.Tensor,
     vel_ang_robot: torch.Tensor,
     # IMU
@@ -255,6 +303,13 @@ def _compute_step_return(
     ## States ##
     ############
     ## Root
+    # Sanitize quaternion before conversion to prevent NaN propagation
+    tf_quat_robot = torch.nan_to_num(tf_quat_robot, nan=0.0)
+    tf_quat_robot = torch.where(
+        torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1e-6,
+        torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+        tf_quat_robot,
+    )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
     tf_rot6d_robot = rotmat_to_rot6d(tf_rotmat_robot)
 
@@ -297,8 +352,15 @@ def _compute_step_return(
     ##################
     ## Terminations ##
     ##################
-    # No termination condition
-    termination = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    # Termination: Robot has fallen (body height too low)
+    # G1 init height is ~0.74m, terminate if below 0.3m
+    termination_fallen = tf_pos_robot[:, 2] < 0.3
+    # Termination: Bad orientation (robot flipped or severely tilted)
+    # z-axis of rotation matrix is the body's up direction in world frame
+    body_up_z = tf_rotmat_robot[:, 2, 2]  # cos(tilt angle)
+    termination_bad_orientation = body_up_z < 0.3  # tilted more than ~70 degrees
+
+    termination = termination_fallen | termination_bad_orientation
     # Truncation
     truncation = (
         episode_length >= max_episode_length

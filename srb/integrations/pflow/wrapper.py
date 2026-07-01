@@ -1,6 +1,7 @@
 from collections import deque
 from functools import cached_property
 from typing import  Any, Dict, Tuple
+# import warnings
 
 import gymnasium
 
@@ -66,6 +67,21 @@ class SrbEnvWrapper(Wrapper):
             )
         else:
             return obs_space
+        
+    # def _sanitize_tensor(self, tensor: torch.Tensor, name: str = "tensor") -> torch.Tensor:
+    #     """检测并修复张量中的 NaN/Inf 值，用 0 替换。返回是否包含非法值。"""
+    #     nan_mask = torch.isnan(tensor)
+    #     inf_mask = torch.isinf(tensor)
+    #     bad_mask = nan_mask | inf_mask
+    #     if bad_mask.any():
+    #         n_bad = bad_mask.sum().item()
+    #         n_total = tensor.numel()
+    #         warnings.warn(
+    #             f"[NaN Guard] {name}: {n_bad}/{n_total} values are NaN/Inf, replacing with 0"
+    #         )
+    #         tensor = tensor.clone()
+    #         tensor[bad_mask] = 0.0
+    #     return tensor
 
     def step(
         self, actions: torch.Tensor
@@ -115,6 +131,10 @@ class SrbEnvWrapper(Wrapper):
         else:
             env_info["time_outs"] = truncated
 
+        # observations_dict = self._sanitize_tensor(observations_dict, name="observations_dict")
+        # for key in observations_dict:
+        #     observations_dict[key] = self._sanitize_tensor(observations_dict[key], name=f"observations_dict/{key}")
+        # reward = self._sanitize_tensor(reward, name="reward")
         return (
             observations_dict,
             reward,

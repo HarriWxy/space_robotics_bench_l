@@ -37,7 +37,7 @@ def run(
     **kwargs,
 ):
     from policyflow_torch.agents import PolicyFlow
-    from policyflow_torch.modules import (
+    from policyflow_torch.modules import (  # for intellisense
         ContinuousNormalizingFlow,
         ConditionLinearLayer,
         FlowMlp,
@@ -76,9 +76,9 @@ def run(
     actor_obs_len = agent_cfg.pop("actor_obs_len", 1)
 
     actor_hidden_dims = agent_cfg.pop("actor_hidden_dims", [512, 256, 128])
-    actor_activations = agent_cfg.pop("actor_activations", ["elu", "elu", "elu", "linear"])
+    actor_activations = agent_cfg.pop("actor_activations", ["mish", "mish", "mish", "linear"])  #
     critic_hidden_dims = agent_cfg.pop("critic_hidden_dims", [512, 256, 128])
-    critic_activations = agent_cfg.pop("critic_activations", ["elu", "elu", "elu", "linear"])
+    critic_activations = agent_cfg.pop("critic_activations", ["mish", "mish", "mish", "linear"])
 
     # Enable action smoothing if enabled
     env = maybe_wrap_action_smoothing(
