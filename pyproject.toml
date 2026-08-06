@@ -23,10 +23,10 @@ classifiers = [
 keywords = ["benchmark", "robotics", "simulation", "space"]
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
-requires-python = "==3.11.*"
+requires-python = "==3.12.*"
 dependencies = [
   ## Core
-  "gymnasium~=1.3.0",
+  "gymnasium~=1.2",
   # "isaaclab~=2.0",
   "oxidasim~=0.1",
   ## Assets
@@ -69,19 +69,19 @@ dreamer = [
 ]
 sb3 = [
   #
-  "stable-baselines3~=2.4",
-  "sb3-contrib~=2.4",
+  "stable-baselines3~=2.9",
+  "sb3-contrib~=2.9",
   # Note: The fork relaxes the dependency for gymnasium (shimmy requires gymnasium>=1.0)
   # "rl_zoo3@git+https://github.com/AndrejOrsula/rl-baselines3-zoo.git@e04921b4ccbadbc9f6bcc46cc1787ffc1d2c8963",
 ]
 sbx = [
   #
-  "sbx-rl~=0.19",
-  "tf_keras~=2.0",
+  "sbx-rl~=0.23",
+  "tf_keras~=2.21",
 ]
 skrl = [
   #
-  "skrl~=1.0",
+  "skrl~=2.0",
 ]
 robomimic = [
   #
@@ -134,7 +134,7 @@ dev = [
 ]
 rich = [
   #
-  "rich~=14.0",
+  "rich~=15.0",
 ]
 test = [
   #
