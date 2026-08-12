@@ -5,7 +5,7 @@ ARG BASE_IMAGE_TAG="24.04"
 ## Isaac Sim <https://catalog.ngc.nvidia.com/orgs/nvidia/containers/isaac-sim>
 ## Label as isaac-sim for copying into the final image
 ARG ISAAC_SIM_IMAGE_NAME="nvcr.io/nvidia/isaac-sim"
-ARG ISAAC_SIM_IMAGE_TAG="5.0.0"
+ARG ISAAC_SIM_IMAGE_TAG="6.0.0"
 FROM ${ISAAC_SIM_IMAGE_NAME}:${ISAAC_SIM_IMAGE_TAG} AS isaac-sim
 
 ## Continue with the base image
@@ -38,7 +38,7 @@ RUN sed -i 's|$SCRIPT_DIR/../../../$LD_LIBRARY_PATH:||' "${ISAAC_SIM_PATH}/setup
     sed -i 's|$SCRIPT_DIR/../../../$PYTHONPATH:||' "${ISAAC_SIM_PATH}/setup_python_env.sh"
 
 ## Build Python with enabled optimizations to improve the runtime training performance
-ARG PYTHON_VERSION="3.11.13"
+ARG PYTHON_VERSION="3.12.13"
 ARG PYTHON_PREFIX="/usr/local"
 ENV PYTHONEXE="${PYTHON_PREFIX}/bin/python${PYTHON_VERSION%.*}"
 # hadolint ignore=DL3003,DL3008
@@ -153,7 +153,7 @@ RUN echo -e "\n# Rust ${RUST_VERSION}" >> /entrypoint.bash && \
     echo "export PYO3_PYTHON=\"${ISAAC_SIM_PYTHON}\"" >> /entrypoint.bash && \
     curl --proto "=https" --tlsv1.2 -sSfL "https://sh.rustup.rs" | sh -s -- --no-modify-path -y --default-toolchain "${RUST_VERSION}" --profile default
 
-# ## Install ROS | Note: Unsuitable because Isaac Sim 5.0 requires Python 3.11 that is not supported by any non-EoL ROS 2 distribution
+# ## Install ROS | Disabled by default; enable this block when the ROS 2 underlay is needed
 # ARG ROS_DISTRO="jazzy"
 # # hadolint ignore=SC1091,DL3008
 # RUN curl --proto "=https" --tlsv1.2 -sSfL "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key" -o /usr/share/keyrings/ros-archive-keyring.gpg && \
