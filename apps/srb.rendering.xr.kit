@@ -7,9 +7,9 @@ keywords = ["benchmark", "robotics", "simulation", "space"]
 
 [dependencies]
 ## OpenXR
-"isaacsim.xr.openxr" = {}
+"omni.kit.xr.core" = {}
 "omni.kit.xr.system.openxr" = {}
-"omni.kit.xr.profile.ar" = {}
+"omni.kit.xr.ui.window.profile" = {}
 
 ## Inheritance
 "srb.rendering" = {}
@@ -27,6 +27,7 @@ app.exts.folders = [
     "${exe-path}/../isaacsim/exts",
     "${exe-path}/../isaacsim/extscache",
     "${exe-path}/../isaacsim/extsPhysics",
+    "${exe-path}/../extsDeprecated",
 ]
 
 ## XR settings
