@@ -131,7 +131,7 @@ def run_agent_with_env(
     # Update the offline registry cache
     update_offline_srb_cache()
 
-    from omni.physx import acquire_physx_interface
+    from omni.physx import get_physx_interface
 
     from srb.interfaces.teleop import EventOmniKeyboardTeleopInterface
     from srb.utils import logging
@@ -140,7 +140,7 @@ def run_agent_with_env(
     from srb.utils.isaacsim import hide_isaacsim_ui
 
     # Post-launch configuration
-    acquire_physx_interface().overwrite_gpu_setting(1)
+    get_physx_interface().overwrite_gpu_setting(1)
     if hide_ui:
         hide_isaacsim_ui()
 
@@ -1144,12 +1144,12 @@ def generate_real_agent(
     # Update the offline registry cache
     update_offline_srb_cache()
 
-    from omni.physx import acquire_physx_interface
+    from omni.physx import get_physx_interface
 
     from srb.utils.hydra.sim import hydra_task_config
 
     # Post-launch configuration
-    acquire_physx_interface().overwrite_gpu_setting(1)
+    get_physx_interface().overwrite_gpu_setting(1)
 
     # Disable Hydra output
     if not any(arg.startswith("hydra.output_subdir=") for arg in forwarded_args):

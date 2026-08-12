@@ -80,7 +80,7 @@ Default `cargo build` builds `srb_gui` only. Use `--workspace` for all crates.
 
 ## Key Constraints
 
-- **Python 3.11 only** (`requires-python = "==3.11.*"`)
+- **Python 3.12 only** (`requires-python = "==3.12.*"`)
 - **Rust MSRV 1.88** (`rust-version = "1.88"` in Cargo.toml)
 - **Tests require NVIDIA GPU + Isaac Sim** — CI only builds, doesn't test
 - **Package manager is `uv`** — lockfile at `uv.lock`, not pip/poetry

@@ -26,15 +26,18 @@ license = { text = "MIT OR Apache-2.0" }
 requires-python = "==3.12.*"
 dependencies = [
   ## Core
-  "gymnasium~=1.2",
-  # "isaaclab~=2.0",
+  "gymnasium",
+  # "isaaclab~=3.0",
   "oxidasim~=0.1",
   ## Assets
-  "simforge[assets]~=0.2",
+  ##"simforge[assets]",
   ## Typing
-  "pydantic~=2.0",
+  "pydantic",
   ## Serialization
-  "orjson~=3.10",
+  "orjson",
+  ##"torch==2.11",
+  ##"torchvision==0.26.0",
+  ##"isaacsim[all,extscache]==6.0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -162,6 +165,31 @@ plots = [
   #
   "seaborn~=0.13",
 ]
+
+[tool.uv]
+no-build-isolation-package = ["idna-ssl"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+isaacsim = {index = "isaac" }
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "isaac"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+
 
 
 [project.scripts]
