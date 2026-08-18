@@ -158,6 +158,11 @@ def construct_observation(
     **kwargs,
 ) -> Dict[str, torch.Tensor]:
     processors = _PROCESSORS_U8 if as_u8 else _PROCESSORS_F32
+    # change items in kwargs from "proxypolicy" class to torch.Tensor, so that we can use torch.jit.script functions on them
+    for item in kwargs.keys():
+        if not isinstance(kwargs[item], torch.Tensor):
+            kwargs[item] = torch.tensor(kwargs[item])
+
     images = {
         f"{image_basename}_{data_type}": processors[data_type](
             kwargs[data_type], clipping_range
