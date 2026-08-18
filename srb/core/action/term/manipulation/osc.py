@@ -45,9 +45,9 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
         jacobian = self.jacobian_w
 
         if self._base_idx:
-            base_quat_w = self._asset.data.body_quat_w[:, self._base_idx]
+            base_quat_w = self._asset.data.body_quat_w.torch[:, self._base_idx]
         else:
-            base_quat_w = self._asset.data.root_quat_w
+            base_quat_w = self._asset.data.root_quat_w.torch
 
         base_rot_matrix = math_utils.matrix_from_quat(math_utils.quat_inv(base_quat_w))
         jacobian[:, :3, :] = torch.bmm(base_rot_matrix, jacobian[:, :3, :])
@@ -59,11 +59,11 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
         self._ee_pose_w[:, 3:7] = self._asset.data.body_quat_w[:, self._ee_body_idx]
 
         if self._base_idx is not None:
-            base_pos_w = self._asset.data.body_pos_w[:, self._base_idx]
+            base_pos_w = self._asset.data.body_pos_w.torch[:, self._base_idx]
             base_quat_w = self._asset.data.body_quat_w[:, self._base_idx]
         else:
-            base_pos_w = self._asset.data.root_pos_w
-            base_quat_w = self._asset.data.root_quat_w
+            base_pos_w = self._asset.data.root_pos_w.torch
+            base_quat_w = self._asset.data.root_quat_w.torch
 
         self._ee_pose_b_no_offset[:, 0:3], self._ee_pose_b_no_offset[:, 3:7] = (
             math_utils.subtract_frame_transforms(
@@ -90,9 +90,9 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
         self._ee_vel_w[:] = self._asset.data.body_vel_w[:, self._ee_body_idx, :]
 
         if self._base_idx is not None:
-            base_vel_w = self._asset.data.body_vel_w[:, self._base_idx]
+            base_vel_w = self._asset.data.body_vel_w.torch[:, self._base_idx]
         else:
-            base_vel_w = self._asset.data.root_vel_w
+            base_vel_w = self._asset.data.root_vel_w.torch
         relative_vel_w = self._ee_vel_w - base_vel_w
 
         self._ee_vel_b[:, 0:3] = math_utils.quat_apply_inverse(

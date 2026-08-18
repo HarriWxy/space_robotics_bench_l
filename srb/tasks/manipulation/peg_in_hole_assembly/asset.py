@@ -1,11 +1,13 @@
-from typing import TYPE_CHECKING, Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Tuple
 
+from isaaclab.assets import Articulation, DeformableObject, RigidObject
 from pydantic import BaseModel, NonNegativeInt
+from pxr import Usd
 from simforge import TexResConfig
 
 from srb import assets
 from srb.core.asset import AssetBaseCfg, AssetVariant, RigidObjectCfg
-from srb.core.sim import SimforgeAssetCfg
+from srb.core.sim import SimforgeAssetCfg, SpawnerCfg
 
 if TYPE_CHECKING:
     from .task import TaskCfg
@@ -23,6 +25,20 @@ class PegCfg(BaseModel, arbitrary_types_allowed=True):
     #  1: No symmetry (exactly one fit)
     #  n: n-fold symmetry (360/n deg between each symmetry)
     symmetry: NonNegativeInt = 1
+
+
+# Resolve forward references in RigidObjectCfg (which uses `from __future__ import annotations`)
+PegCfg.model_rebuild(
+    _types_namespace={
+        "Articulation": Articulation,
+        "DeformableObject": DeformableObject,
+        "RigidObject": RigidObject,
+        "SpawnerCfg": SpawnerCfg,
+        "Usd": Usd,
+        "Literal": Literal,
+        "InitialStateCfg": AssetBaseCfg.InitialStateCfg,
+    }
+)
 
 
 class HoleCfg(BaseModel):

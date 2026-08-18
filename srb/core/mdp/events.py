@@ -61,10 +61,13 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
     for articulation_asset in env.scene.articulations.values():
         # Obtain default and deal with the offset for env origins
         default_root_state = articulation_asset.data.default_root_state[env_ids].clone()
-        default_root_state[:, 0:3] += env.scene.env_origins[env_ids]
+        # default_root_pos = articulation_asset.data.default_root_pose[env_ids].clone()
+        # default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
+        
+        default_root_state[:, 0:3] += env.scene.env_origins[env_ids] ## what does this mean?  
         # Set into the physics simulation
-        articulation_asset.write_root_pose_to_sim(
-            default_root_state[:, :7],
+        articulation_asset.write_root_pose_to_sim_index(
+            root_pose=default_root_state[:, :7],
             env_ids=env_ids,  # type: ignore
         )
         articulation_asset.write_root_velocity_to_sim(
@@ -75,11 +78,19 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
         default_joint_pos = articulation_asset.data.default_joint_pos[env_ids].clone()
         default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
         # Set into the physics simulation
-        articulation_asset.write_joint_state_to_sim(
-            default_joint_pos,
-            default_joint_vel,
+        articulation_asset.write_joint_position_to_sim_index(
+            position = default_joint_pos,
             env_ids=env_ids,  # type: ignore
         )
+        articulation_asset.write_joint_velocity_to_sim_index(
+            velocity = default_joint_vel,
+            env_ids=env_ids,  # type: ignore
+        )
+        # articulation_asset.write_joint_state_to_sim(
+        #     default_joint_pos,
+        #     default_joint_vel,
+        #     env_ids=env_ids,  # type: ignore
+        # )
 
 
 def reset_deformable_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
@@ -515,7 +526,9 @@ def randomize_gravity_uniform(
     env_ids: torch.Tensor | None,
     distribution_params: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
 ):
-    physics_scene = env.sim._physics_context._physics_scene  # type: ignore
+    from pxr import UsdPhysics  # noqa: PLC0415
+
+    physics_scene = UsdPhysics.Scene.Get(env.sim.stage, env.sim.cfg.physics_prim_path)  # type: ignore
     gravity = sample_uniform(
         torch.tensor(distribution_params[0]),
         torch.tensor(distribution_params[1]),
@@ -528,8 +541,16 @@ def randomize_gravity_uniform(
     else:
         gravity_direction = gravity / gravity_magnitude
 
-    physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction.tolist()))
-    physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude.item())
+    gravity_dir_attr = physics_scene.GetGravityDirectionAttr()
+    if gravity_dir_attr is None:
+        physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction.tolist()))
+    else:
+        gravity_dir_attr.Set(Gf.Vec3f(*gravity_direction.tolist()))
+    gravity_mag_attr = physics_scene.GetGravityMagnitudeAttr()
+    if gravity_mag_attr is None:
+        physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude.item())
+    else:
+        gravity_mag_attr.Set(gravity_magnitude.item())
 
 
 def follow_xform_orientation_linear_trajectory(
