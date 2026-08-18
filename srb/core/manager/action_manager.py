@@ -1,8 +1,11 @@
 from typing import Callable
 
-from isaaclab.managers import ActionManager as __ActionManager
+from isaaclab.managers import (
+    ActionManager as __ActionManager,
+    ActionTerm,
+    ActionTermCfg,
+)
 
-from srb.core.action import ActionTerm, ActionTermCfg
 
 
 class ActionManager(__ActionManager):

@@ -16,6 +16,7 @@ IGNORED_SPAWN_ATTRIBUTES = (
     "height",
     "axis",
     "random_choice",
+    "spawn_paths",
 )
 
 
@@ -68,12 +69,19 @@ def spawn_multi_shape(
             )
         )
 
+    if cfg.spawn_paths is not None:
+        # Clone planner has assigned concrete paths — pass them through
+        pass
+    elif ".*" not in prim_path.split("/")[-1]:
+        prim_path = prim_path + ".*"
+
     # Create and spawn multi-asset configuration
     return spawn_multi_asset(
         prim_path=prim_path,
         cfg=MultiAssetSpawnerCfg(
             assets_cfg=assets_cfg,
             random_choice=cfg.random_choice,
+            spawn_paths=cfg.spawn_paths,
         ),
         translation=translation,
         orientation=orientation,

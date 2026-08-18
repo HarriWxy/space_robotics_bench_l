@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import threading
 import time
 from collections.abc import Callable
 from typing import List
 
 import numpy
-import pyspacemouse
 from scipy.spatial.transform import Rotation
 
 from srb.interfaces.teleop import DeviceBase
@@ -19,6 +20,9 @@ class SpacemouseTeleopInterface(DeviceBase):
         rot_sensitivity: float = 3.1415927,
         rate: float = 1000.0,
     ):
+        import pyspacemouse
+
+        self._pyspacemouse = pyspacemouse
         self.pos_sensitivity = pos_sensitivity
         self.rot_sensitivity = rot_sensitivity
         self.sleep_rate = 1.0 / rate
@@ -31,7 +35,7 @@ class SpacemouseTeleopInterface(DeviceBase):
 
         # Open the device
         try:
-            success = pyspacemouse.open(
+            success = self._pyspacemouse.open(
                 dof_callback=self._cb_dof,  # type: ignore
                 button_callback=self._cb_button,  # type: ignore
             )
@@ -77,7 +81,7 @@ class SpacemouseTeleopInterface(DeviceBase):
 
     def _run_device(self):
         while True:
-            _state = pyspacemouse.read()
+            _state = self._pyspacemouse.read()
             time.sleep(self.sleep_rate)
 
     def _cb_dof(self, state: pyspacemouse.SpaceNavigator):

@@ -12,6 +12,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     Sequence,
     Set,
@@ -19,6 +20,8 @@ from typing import (
     Type,
 )
 
+from pxr import Usd
+from isaaclab.assets import Articulation, DeformableObject, RigidObject
 from pydantic import BaseModel, PositiveFloat
 from simforge import BlGeometry, BlModel, BlShader, TexResConfig
 
@@ -28,6 +31,7 @@ from srb.core.asset.asset_variant import AssetVariant
 from srb.core.domain import Domain
 from srb.core.sim import (
     ArticulationRootPropertiesCfg,
+    GroundPlaneCfg,
     MultiAssetSpawnerCfg,
     RigidBodyPropertiesCfg,
     ShapeCfg,
@@ -39,6 +43,17 @@ from srb.utils.str import convert_to_snake_case
 
 if TYPE_CHECKING:
     from srb._typing import AnyEnvCfg
+
+
+_PYDANTIC_TYPES_NAMESPACE = {
+    "Articulation": Articulation,
+    "DeformableObject": DeformableObject,
+    "RigidObject": RigidObject,
+    "SpawnerCfg": SpawnerCfg,
+    "Usd": Usd,
+    "Literal": Literal,
+    "InitialStateCfg": AssetBaseCfg.InitialStateCfg,
+}
 
 
 class Asset(BaseModel):
@@ -117,6 +132,11 @@ class Asset(BaseModel):
                     AssetRegistry.registry[asset_type].append(cls)
                     break
 
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs):
+        super().__pydantic_init_subclass__(**kwargs)
+        cls.model_rebuild(force=True, _types_namespace=_PYDANTIC_TYPES_NAMESPACE)
+
     @cached_property
     def asset_type(self) -> AssetType:
         for asset_type, base in AssetRegistry.base_types.items():
@@ -136,7 +156,7 @@ class Asset(BaseModel):
         def __get_variant(spawner: SpawnerCfg) -> AssetVariant:
             if isinstance(spawner, SimforgeAssetCfg):
                 return AssetVariant.PROCEDURAL
-            elif isinstance(spawner, ShapeCfg):
+            elif isinstance(spawner, (GroundPlaneCfg, ShapeCfg)):
                 return AssetVariant.PRIMITIVE
             else:
                 return AssetVariant.DATASET
@@ -349,7 +369,9 @@ class Asset(BaseModel):
             if new_annotation is not None:
                 self.__annotations__["asset_cfg"] = new_annotation
                 self.model_fields["asset_cfg"].annotation = new_annotation
-                self.model_rebuild(force=True)
+                self.model_rebuild(
+                    force=True, _types_namespace=_PYDANTIC_TYPES_NAMESPACE
+                )
 
             return asset_cfg
         elif isinstance(self.asset_cfg, AssetBaseCfg):
@@ -409,7 +431,9 @@ class Asset(BaseModel):
             if new_annotation is not None:
                 self.__annotations__["asset_cfg"] = new_annotation
                 self.model_fields["asset_cfg"].annotation = new_annotation
-                self.model_rebuild(force=True)
+                self.model_rebuild(
+                    force=True, _types_namespace=_PYDANTIC_TYPES_NAMESPACE
+                )
 
             return asset_cfg
         elif isinstance(self.asset_cfg, RigidObjectCfg):

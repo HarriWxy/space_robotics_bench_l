@@ -148,13 +148,40 @@ class Task(ManipulationEnv):
         ## Visualize target
         self._target_marker.visualize(self._tf_pos_target, self._tf_quat_target)
 
+    def _get_terrain_prim_path(self) -> str | None:
+        if self._scenery is None:
+            return None
+
+        prim_paths = self._scenery.prim_paths
+        if prim_paths:
+            return prim_paths[0]
+
+        scenery_cfg = getattr(getattr(self.cfg, "scene", None), "scenery", None)
+        scenery_path = getattr(scenery_cfg, "prim_path", "")
+        if not scenery_path:
+            scenery_path = getattr(self._scenery, "_prim_path", "")
+        if not scenery_path:
+            usd_view = getattr(self._scenery, "_usd_view", None)
+            scenery_path = getattr(usd_view, "_prim_path", "")
+        if not scenery_path:
+            return None
+
+        import isaaclab.sim as sim_utils
+
+        scenery_path_regex = (
+            scenery_path if scenery_path.endswith(".*") else f"{scenery_path}.*"
+        )
+        matching_paths = sim_utils.find_matching_prim_paths(scenery_path_regex)
+        self._scenery.prim_paths.extend(matching_paths)
+        return matching_paths[0] if matching_paths else None
+
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
         env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
         root_quat = self._obj.data.root_quat_w[env_ids_tensor].clone()
         baseline_pose = root_pose.clone()
-        terrain_prim_path = self._scenery.prim_paths[0] if self._scenery is not None else None
+        terrain_prim_path = self._get_terrain_prim_path()
 
         if terrain_prim_path is not None:
             terrain_heights = terrain_surface_heights(
@@ -277,6 +304,7 @@ class Task(ManipulationEnv):
         super()._pre_physics_step(processed_actions)
 
     def extract_step_return(self) -> StepReturn:
+        terrain_prim_path = self._get_terrain_prim_path()
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -288,63 +316,63 @@ class Task(ManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
             if isinstance(self._end_effector, Articulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
+                self._end_effector.data.soft_joint_pos_limits.torch
                 if isinstance(self._end_effector, Articulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_vel_robot=self._robot.data.joint_vel,
-            joint_vel_end_effector=self._end_effector.data.joint_vel
+            joint_vel_robot=self._robot.data.joint_vel.torch,
+            joint_vel_end_effector=self._end_effector.data.joint_vel.torch
             if isinstance(self._end_effector, Articulation)
             else None,
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.data.applied_torque.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
             tf_pos_obj_initial=self._tf_pos_obj_initial,
-            tf_pos_obj=self._obj.data.root_com_pos_w,
-            tf_quat_obj=self._obj.data.root_com_quat_w,
-            vel_lin_obj=self._obj.data.root_lin_vel_w,
-            vel_ang_obj=self._obj.data.root_ang_vel_w,
+            tf_pos_obj=self._obj.data.root_com_pos_w.torch,
+            tf_quat_obj=self._obj.data.root_com_quat_w.torch,
+            vel_lin_obj=self._obj.data.root_lin_vel_w.torch,
+            vel_ang_obj=self._obj.data.root_ang_vel_w.torch,
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
             terrain_height_end_effector=(
                 terrain_surface_heights(
-                    self._scenery.prim_paths[0],
-                    self._tf_end_effector.data.target_pos_w[:, 0, :],
+                    terrain_prim_path,
+                    self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
                     self.scene.env_origins,
                     torch.arange(self.num_envs, device=self.device, dtype=torch.long),
                 )
-                if self._scenery is not None
+                if terrain_prim_path is not None
                 else torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
             ),
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
             if isinstance(self._contacts_end_effector, ContactSensor)
             else None,
             contact_forces_end_effector_collision=(
-                self._contacts_end_effector_collision.data.net_forces_w
+                self._contacts_end_effector_collision.data.net_forces_w.torch
                 if isinstance(self._contacts_end_effector_collision, ContactSensor)
                 else None
             ),
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
             if isinstance(self._contacts_end_effector, ContactSensor)
             else None,
         )
@@ -492,12 +520,12 @@ def _compute_step_return(
     contact_forces_mean_end_effector = (  # 平均
         contact_forces_end_effector.mean(dim=1)
         if contact_forces_end_effector is not None
-        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+        else  torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
     contact_forces_mean_end_effector_collision = ( # 末端执行器与物体碰撞的平均接触力，可能是一个重要的指标，过大可能表示过于粗暴的接触，过小可能表示没有有效接触
         contact_forces_end_effector_collision.mean(dim=1)
         if contact_forces_end_effector_collision is not None
-        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+        else None # torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
     contact_forces_end_effector = ( # 末端执行器的接触力矩阵，包含每个接触点的力和位置等信息，可以用于更细粒度的奖励设计，例如鼓励在特定位置产生接触力，或者惩罚过大的接触力
         contact_forces_end_effector
@@ -507,7 +535,7 @@ def _compute_step_return(
     contact_forces_end_effector_collision = ( # 末端执行器与物体碰撞的接触力矩阵，包含每个碰撞接触点的力和位置等信息，可以用于分析碰撞质量，或者设计基于碰撞的奖励，例如鼓励在物体上产生稳定的接触力分布
         contact_forces_end_effector_collision
         if contact_forces_end_effector_collision is not None
-        else torch.empty((num_envs, 0), dtype=dtype, device=device)
+        else None  #torch.empty((num_envs, 0), dtype=dtype, device=device)
     )
 
     #############

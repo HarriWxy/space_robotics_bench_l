@@ -150,99 +150,6 @@ uv run python scripts/train.py \
 
 先沿着当前入口 vlamain.py 往下定位 VLA rollout 的实际观测构造点，再结合仓库里已有的视觉观测说明，确认传给算法 server 的 `observ` 是在哪一层定义的、字段各自含义是什么。
 
-Searched for regex `observ|observation|obs_dict|vla` (`**/vla/**`), 28 results
-
-Searched for regex `observ|observation|obs_dict|vla` (`**/srb/**`), 100 results
-
-Read memory [](file:///root/.vscode-server/data/User/workspaceStorage/eb517b899284a574d0ab0f283eb93510/GitHub.copilot-chat/memory-tool/memories/repo/visual-observations.md)
-
-Read memory [](file:///root/.vscode-server/data/User/workspaceStorage/eb517b899284a574d0ab0f283eb93510/GitHub.copilot-chat/memory-tool/memories/repo/vla-entrypoint.md)
-
-已经定位到控制链路：入口只是把环境切到 `*_visual` 并调用 `srb vla`，真正把环境 observation 发给算法 server 的逻辑在 openpi.py，下一步我直接看这个文件和视觉扩展的 `_get_observations()`。
-
-Searched for regex `class VisualExt|def _get_observations|image_cam_|cam_wrist|cam_base` (`**/srb/**`), 33 results
-
-Read [](file:///root/space_robotics_bench_l/srb/integrations/openpi.py)
-
-Read [](file:///root/space_robotics_bench_l/vla/README.md)
-
-现在需要把“定义点”和“语义”拆开看：一层是 VLA 客户端把整个 obs dict 原样发出去，另一层是具体 visual 任务如何拼出这个 dict。我继续读默认的 `sample_collection_visual` 任务和通用 `VisualExt`。
-
-Searched for regex `def _get_observations\(|return \{|state|proprio|proprio_dyn|state_dyn` (`**/srb/tasks/manipulation/sample_collection/**`), 80 results
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/extension/visual/impl.py#1-1), lines 1 to 220
-
-Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task_visual.py)
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/manipulation/visual_ext.py)
-
-视觉任务的 obs dict 不是单独重写一套，而是把常规任务观测和视觉扩展观测直接合并；现在我读默认 sample_collection 的低维观测定义，确认每个 key 的具体内容。
-
-Searched for regex `image_cam_base|image_cam_wrist|prompt|infer\(|_prepare_request`, 44 results
-
-Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#700-700), lines 700 to 818
-
-Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#360-360), lines 360 to 520
-
-还有一个关键点要确认：任务代码里先按 `state/proprio/...` 分组返回，但传给 server 时看起来是扁平 dict，所以我补一跳看环境基类在哪把这些组展开。
-
-Searched for regex `flatten|unflatten|observation_group|single_observation_space|observations` (`**/srb/core/env/**`), 17 results
-
-Searched for regex `StepReturn\(|_get_observations\(|observation_space` (`**/srb/tasks/manipulation/sample_collection/task.py`), 1 result
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/base/direct/impl.py#430-430), lines 430 to 560
-
-分组观测确实会在环境基类里做一次扁平化；我补上这段实现，这样能准确解释 server 看到的是“按组拼接后的向量”，还是“保留原字段名的独立张量”。
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/base/direct/impl.py#556-556), lines 556 to 574
-
-现在已经确认 VLA server 看到的是顶层六类 key：四个低维组加相机图像。还差两个细节：图像里到底包含哪些通道、默认是 RGB 还是 RGBD，以及相机配置本身在哪定义。
-
-Searched for regex `data_types|width|height|resolution|CameraCfg\(|spawn=PinholeCameraCfg` (`**/srb/core/**`), 120 results
-
-Searched for regex `class StepReturn|extract_step_return` (`**/srb/**`), 43 results
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/extension/visual/cfg.py)
-
-还差最后一块：`extract_step_return` 的数据结构定义。确认后就能把“任务内部定义”和“发给 server 的最终形态”一一对应起来。
-
-Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#260-260), lines 260 to 340
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/base/direct/impl.py#140-140), lines 140 to 180
-
-Read [](file:///root/space_robotics_bench_l/srb/_typing/step_return.py)
-
-如果要把 `state` 里每个标志量讲清楚，还要补一段 reward/termination 逻辑附近的定义，尤其是 `stable_grasp`、`transport_ready`、`pregrasp_ready`、`success` 这些任务语义字段。
-
-Searched for regex `stable_grasp|transport_ready|pregrasp_ready|success\s*=|distance_xy_to_obj|height_above_obj` (`**/srb/tasks/manipulation/sample_collection/task.py`), 55 results
-
-Read [](file:///root/space_robotics_bench_l/srb/tasks/manipulation/sample_collection/task.py#520-520), lines 520 to 720
-
-图像这边还有一个容易忽略的细节：默认不是纯 RGB，而是把 `rgb` 和 `depth` 合并到同一个张量里。我再补完整个通道拼接实现，避免解释错。
-
-Read [](file:///root/space_robotics_bench_l/srb/core/env/common/extension/visual/impl.py#200-200), lines 200 to 252
-
-README 里把相机键简称成 RGB，但代码路径看起来默认会补上 depth。我再确认一下 `CameraCfg` 的默认 `data_types`，避免把文档语义和实际运行时混在一起。
-
-Searched for regex `class CameraCfg|data_types:|data_types =` (`**/srb/core/sensor/**`), no results
-
-Searched for files matching `**/srb/core/sensor/**/*.py`, 2 matches
-
-`CameraCfg` 是 re-export 出来的，我直接看传感器模块入口确认它来自哪里；如果是外部类，就只基于本仓库对它的覆盖逻辑来说明。
-
-Searched for text `CameraCfg` (`**/srb/**`), 50 results
-
-Read [](file:///root/space_robotics_bench_l/srb/core/sensor/__init__.py)
-
-SRB 这边已经定位完了。为了区分“发出的数据结构”和“算法 server 内部如何消费它”，我最后确认一下当前工作区里有没有 server 侧的 `srb_policy.py`；没有的话我会明确告诉你哪部分只能根据 README 契约来解释。
-
-Searched for files matching `**/srb_policy.py`, no matches
-
-Searched for files matching `**/openpi/**`, no matches
-
-我补一条仓库记忆，记录这个容易踩坑的点：当前 visual VLA 出站图像默认是合并后的 RGBD，而不是纯 RGB 文档表述。
-
-Inserted into memory file [](file:///root/.vscode-server/data/User/workspaceStorage/eb517b899284a574d0ab0f283eb93510/GitHub.copilot-chat/memory-tool/memories/repo/visual-observations.md)
 
 不是在 vlamain.py 里定义的。这个文件现在只负责把参数转发到 SRB 的 VLA 子命令。当前这条视觉 VLA 执行流里，发给算法 server 的 observ 定义链路是这样的：
 
@@ -272,3 +179,153 @@ Inserted into memory file [](file:///root/.vscode-server/data/User/workspaceStor
 如果你要继续往下钻，我可以接着做两件事：
 1. 把 sample_collection_visual 的 state、state_dyn、proprio、proprio_dyn 按实际拼接顺序和每段维度展开成一张完整表。
 2. 如果你把算法 server 那边的仓库也打开，我可以继续顺着 server 端的解包和输入适配逻辑追到模型前。
+
+### 2
+
+先把路线分成两条，不要一开始混在一起做。
+
+当前这套接入里，SRB 侧已经把标准 OpenPI 风格的 VLA rollout 接通了，训练说明和输入约束在 README.md，在线 rollout 的实际链路在 openpi.py。但 SRB 自带的 collect 流在仿真 agent 侧还没实现，当前就是 NotImplemented，见 __main__.py。所以最稳的做法不是直接冲“完整 ACoT”，而是先做一条能闭环的标准 VLA 训练流，再把 coarse action 这条链补上。尤其要注意，你现在外部 ACoT-VLA 仓库里虽然已经有 SRB 配置和一些 coarse action 痕迹，但数据加载、norm stats 和训练分支之间还有接口不一致，直接照 README 盲跑风险很高。
+
+**建议训练流**
+1. 先做单任务、单机器人、视觉版基线。优先从 sample_collection_visual 开始，不要一上来混 debris capture、assembly、mobile manipulation。空间机器人 VLA 最难的是长时序和分布漂移，不是任务数量。
+2. 自己补一层数据采集器。最简单的方式是复用 openpi.py 和 openpi.py 里那种 gymnasium.make + step 循环，在每一步把 prompt、obs dict、action、done、task id 全部记下来。数据源建议混三类：人遥操作示教、脚本化 teacher、已有 RL expert rollout。
+3. 数据格式先严格对齐 LeRobot。最少保留 proprio、state、image_cam_base、image_cam_wrist、actions、task；如果后面要做真正 ACoT，再额外加入 coarse_actions。这里不要混用两种动作语义，整个数据集必须统一成同一种 action 表达。
+4. 先跑标准 VLA 微调，不要先用快速版。原因很简单：当前 SRB adapter 会把拼接后的状态向量裁到模型允许的维度，pi05_srb 至少还能容 32 维状态，而 pi0_fast_srb 会更早遇到状态瓶颈。开发阶段应该强制开启状态维度检查，而不是接受静默截断。
+5. 把验证前置，而不是把训练前置。先做小数据集冒烟，确认三件事：训练能读到 norm stats，batch 里的 state 和 image 没被错误裁切，server rollout 能在 SRB 里稳定闭环。
+6. 基线稳定后，再补 coarse action。推荐离线生成，不要先改在线推理：先从成功轨迹里根据阶段规则或几何阈值生成 coarse_actions，再把训练 batch 扩成 observation、actions、coarse_actions 三元组，最后再切到 ACoT 分支。
+
+**针对空间机器人的模型设计**
+1. 先改状态输入，不要再靠截断。空间任务里最有价值的不是原始大向量，而是相对位姿、接触、速度和任务阶段。建议把 state 设计成两级：一级是高价值摘要特征，二级是动态补充特征；再用一个小 projector 或 state token 化把它压到模型输入维，而不是直接裁掉尾部。
+2. 两视角一定保留，深度信息最好显式建模。SRB 现在是 base 和 wrist 两路视角，这对抓取、对接、插装都很关键。若继续沿用当前 RGB-only 适配，你会丢掉对低纹理、强阴影、反光表面的判别力。更合理的是把 depth 作为单独分支或 4 通道 stem，而不是默认忽略。
+3. coarse action 不要做成“抽象标签”，要做成可执行的子目标。对采样抓取类任务，粗粒度链条可以是 approach、align、pregrasp、close、lift、transport、place。对轨道捕获类任务，可以是 relative approach、velocity nulling、capture、stabilize。这样 coarse reasoning 才真的对空间机器人有增益。
+4. 训练策略用课程式，不要全任务混训起步。推荐顺序是：单任务单域，单任务多资产，单任务多域，多个相邻 manipulation 任务，最后再加入 mobile manipulation 和 orbital 任务。跨任务泛化建立在动作结构共享上，不是建立在 prompt 堆料上。
+5. 语言设计不要只写一句自然语言。空间机器人任务很受场景条件影响，建议把 domain、object、goal、safety constraint 编到 prompt 模板里，比如把月球/火星、目标类型、碰撞约束、目标姿态偏好一起写进去。
+6. 评价指标不要只看 success rate。你至少要同时看碰撞率、接触稳定性、阶段完成率、动作平滑度、prompt 改写鲁棒性和跨域泛化。SRB 任务本身就有不少阶段性信号，适合拿来做更细的诊断。
+
+**当前最该先修的点**
+- SRB 自带 collect 不能直接用，数据采集需要你自己补。
+- 外部 ACoT 仓库当前的标准 SRB 配置本质上还是标准 VLA 微调，不是完整 ACoT 训练。
+- 外部仓库里的 norm stats 脚本、data loader 和 coarse action 训练分支目前不完全一致，建议先修通这条窄链路，再上大规模训练。
+- 现有 SRB adapter 的状态截断会成为性能上限，尤其对空间场景的接触和相对位姿推理影响很大。
+
+如果你要继续，我建议直接做下面两件事之一：
+1. 我先帮你补一套 SRB 到 LeRobot 的数据采集与导出脚本，把标准 pi05_srb 基线跑通。
+2. 我直接帮你改外部 ACoT-VLA 仓库，把 coarse_actions、norm stats 和 data loader 这条训练链打通。
+
+我继续把两块补全：先把 sample_collection_visual 的四组低维观测按实际拼接顺序和维度展开，再顺着外部 ACoT-VLA 仓库里的 srb_policy.py 追到 server 端的解包与模型输入适配逻辑。
+
+已完成: *定位 ACoT-VLA 可见配置面* (2/4)
+
+先更正上一条里最关键的一处：当前 SRB 视觉观测的真实出站键不是 image_cam_base 和 image_cam_wrist，而是 image_base 和 image_wrist。命名逻辑在 impl.py 和 str.py，其中 sanitize_cam_name 会把 cam_base 变成 base、cam_wrist 变成 wrist。视觉任务本身只是把普通任务观测和视觉扩展观测合并，见 task_visual.py。低维组内的最终拼接顺序由 impl.py 决定，规则就是对每组子键按字母序排序后再拼接。
+
+**1. 观测展开**
+我做了两次实际 reset 测量。
+
+1. sample_collection_visual 默认机器人是 Franka，默认来源在 env.py。实测 shape 是：
+state 41，state_dyn 39，proprio 9，proprio_dyn 32，image_base 和 image_wrist 都是 64×64×4，action space 是 7。
+2. 通过 vlamain.py 那条本地 wrapper 默认会强制 env.robot=ur5+robotiq_hand_e。实测 shape 是：
+state 41，state_dyn 36，proprio 9，proprio_dyn 28，image_base 和 image_wrist 都是 64×64×4，action space 是 8。
+
+四组低维观测的定义位置在 task.py。
+
+state 的实际拼接顺序和维度，两种机器人相同，总计 41 维：
+
+| 顺序 | 字段 | 维度 |
+|---|---|---:|
+| 1 | contact_forces_mean_end_effector | 3 |
+| 2 | contact_forces_mean_end_effector_collision | 3 |
+| 3 | contact_forces_mean_robot | 3 |
+| 4 | distance_obj_to_target | 1 |
+| 5 | distance_xy_end_effector_to_obj | 1 |
+| 6 | end_effector_collision_force_max | 1 |
+| 7 | end_effector_collision_undesired | 1 |
+| 8 | gripper_aperture | 1 |
+| 9 | height_above_obj | 1 |
+| 10 | height_above_terrain | 1 |
+| 11 | pregrasp_ready | 1 |
+| 12 | sample_ang_speed | 1 |
+| 13 | sample_lift_height | 1 |
+| 14 | sample_lin_speed | 1 |
+| 15 | stable_grasp | 1 |
+| 16 | success | 1 |
+| 17 | tf_pos_end_effector_to_obj | 3 |
+| 18 | tf_pos_obj_to_target | 3 |
+| 19 | tf_rot6d_end_effector_to_obj | 6 |
+| 20 | tf_rot6d_obj_to_target | 6 |
+| 21 | transport_ready | 1 |
+
+proprio 的实际拼接顺序和维度，两种机器人相同，总计 9 维：
+
+| 顺序 | 字段 | 维度 |
+|---|---|---:|
+| 1 | fk_pos_end_effector | 3 |
+| 2 | fk_rot6d_end_effector | 6 |
+
+state_dyn 的实际拼接顺序和维度：
+
+| 顺序 | 字段 | Franka 默认 | UR5 + Robotiq |
+|---|---|---:|---:|
+| 1 | contact_forces_end_effector | 9 | 9 |
+| 2 | contact_forces_robot | 24 | 21 |
+| 3 | sample_ang_vel | 3 | 3 |
+| 4 | sample_lin_vel | 3 | 3 |
+| 合计 |  | 39 | 36 |
+
+这里 contact_forces_robot 的差异来自接触传感器监控的刚体数不同。机器人接触传感器挂载逻辑在 env.py。UR5 和 UR5RobotiqHandE 的定义在 universal_robots.py 和 universal_robots.py。Robotiq 两个滑块关节定义在 robotiq.py。
+
+proprio_dyn 的实际拼接顺序和维度：
+
+| 顺序 | 字段 | Franka 默认 | UR5 + Robotiq |
+|---|---|---:|---:|
+| 1 | joint_acc_robot | 7 | 6 |
+| 2 | joint_applied_torque_robot | 7 | 6 |
+| 3 | joint_pos_end_effector_normalized | 2 | 2 |
+| 4 | joint_pos_robot_normalized | 7 | 6 |
+| 5 | joint_vel_end_effector | 2 | 2 |
+| 6 | joint_vel_robot | 7 | 6 |
+| 合计 |  | 32 | 28 |
+
+图像部分的 runtime 事实也需要一起纠正：
+1. 实际键名是 image_base 和 image_wrist，不是 README 里写的 image_cam_base 和 image_cam_wrist。
+2. 实际张量是 64×64×4，因为 impl.py 会把 rgb 和 depth 合并到一个 image_* 张量里。
+3. 所以当前 SRB 出站图像是 RGBD 风格的 4 通道 uint8，而不是纯 RGB。
+
+**2. Server 端解包与输入适配**
+现在这条链路可以明确写成：
+
+1. SRB rollout 端在 openpi.py 直接把环境 observation dict 原样转成 numpy，再塞一个 prompt，发给 websocket server。这里没有任何图像键重命名。
+2. server 端的 serve 入口会根据 config_name 取训练配置，然后创建 trained policy。外部 ACoT-VLA 仓库里这一步会把训练时的数据 transforms 原样复用于推理。
+3. 外部仓库的 SRBDataConfig 默认 observation_keys 是 proprio、state，默认 image_keys 还是 image_cam_base、image_cam_wrist；pi05_srb 和 pi0_fast_srb 也都沿用了这个设置。
+4. create_trained_policy 的输入变换顺序是：
+InjectDefaultPrompt → SRBInputs → Normalize → 模型自己的 transforms。
+5. Policy.infer 会先跑完整个输入 transform 链，再 batch 化成 Observation，然后调用 model.sample_actions，最后再跑输出 transform 链。
+
+外部仓库里 SRBInputs 这一层的真实行为有四个关键点：
+
+1. 它按 observation_keys 的声明顺序拼接，不是按组名排序。默认就是先 proprio，再 state。
+2. 它对图像键做的是精确匹配。如果没找到，就直接补零图像。
+3. 它会把超过 3 通道的图像截到前 3 通道，所以即使你把键名改对，当前深度通道也会被丢掉。
+4. 它会在进入模型前把 state 截断到模型 action_dim，再做 zero pad。
+
+这四点叠在一起，得到三个直接后果：
+
+1. 当前 SRB runtime 发的是 image_base 和 image_wrist，但外部 SRBDataConfig 和 SRBInputs 默认找的是 image_cam_base 和 image_cam_wrist。
+结果不是“图像错位”，而是更糟的“图像直接没被取到，自动补零”。
+2. 即使把图像键改对，SRB 真实出站是 4 通道 RGBD，SRBInputs 仍会把第 4 个通道裁掉，只留下 RGB。
+3. 默认 state 拼接是 proprio 9 维 + state 41 维 = 50 维。
+对 pi05_srb，进入 SRBInputs 时会截到 32 维，所以只保留完整 proprio 9 维和 state 的前 23 维。
+这意味着它会保留到 tf_pos_end_effector_to_obj 的第 1 个分量为止，后面的相对位置剩余分量、两段 6D 旋转、transport_ready 全都会被裁掉。
+对 pi0_fast_srb 更极端，因为模型 action_dim 是 7，默认配置下它只会保留拼接向量的前 7 维，也就是 proprio 的前 7 维，连完整 proprio 都留不全，更不用说任务 state。
+4. rollout 还会在 openpi.py 检查 policy 输出动作维度是否等于环境 action space。
+而 vlamain.py 默认强制的 UR5 + Robotiq 配置，实测 action space 是 8，不是 README 里写的 7。
+所以当前外部 pi05_srb 和 pi0_fast_srb 这两个 7 维配置，和 wrapper 默认 UR5 rollout 也是不闭环的。
+
+压缩成一句话就是：
+当前这条 SRB ↔ ACoT-VLA 接入里，真正会影响结果的不是“模型有没有读到 depth”，而是更前面的两个兼容性问题：
+图像键名已经漂移，动作维度也已经漂移。
+
+如果你要继续推进，我建议下一步只做两件具体事：
+
+1. 我直接帮你把 README.md 和外部 ACoT-VLA 仓库里的 SRBDataConfig 默认值统一到当前真实 runtime：
+image_base、image_wrist，UR5 8 维动作。
+2. 我继续把 pi05_srb 当前 50→32 的截断向量精确展开成“哪些维度被保留，哪些维度被丢弃”的一张表，然后顺手给你一个更合理的 observation_keys 和 state projector 设计。
