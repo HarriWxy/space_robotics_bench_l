@@ -80,6 +80,11 @@ class UnitreeH1(Humanoid):
                     ".*_knee": 5.0,
                     "torso": 5.0,
                 },
+                armature={
+                    ".*_hip_.*": 0.01,
+                    ".*_knee": 0.01,
+                    "torso": 0.01,
+                },
             ),
             "feet": ImplicitActuatorCfg(
                 joint_names_expr=[".*_ankle"],
@@ -87,6 +92,7 @@ class UnitreeH1(Humanoid):
                 velocity_limit_sim=100.0,
                 stiffness={".*_ankle": 20.0},
                 damping={".*_ankle": 4.0},
+                armature={".*_ankle": 0.01},
             ),
             "arms": ImplicitActuatorCfg(
                 joint_names_expr=[
@@ -108,6 +114,10 @@ class UnitreeH1(Humanoid):
                     ".*_shoulder_roll": 10.0,
                     ".*_shoulder_yaw": 10.0,
                     ".*_elbow": 10.0,
+                },
+                armature={
+                    ".*_shoulder_.*": 0.01,
+                    ".*_elbow": 0.01,
                 },
             ),
         },

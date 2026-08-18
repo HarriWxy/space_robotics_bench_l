@@ -107,18 +107,45 @@ class LocomotionTask(Task):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
-        # Sanitize IMU data to prevent NaN propagation
-        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # # Sanitize velocity data
-        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # # Sanitize projected gravity
-        # projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # # Sanitize joint data
-        # joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
-        # joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc, nan=0.0, posinf=0.0, neginf=0.0)
-        # joint_applied_torque_robot = torch.nan_to_num(self._robot.data.applied_torque, nan=0.0, posinf=0.0, neginf=0.0)
+        # Ensure IMU sensor internal buffers are on the correct device.
+        # During __post_init__ (called by gymnasium.make before any
+        # simulation step), the IMU's _offset_pos_b may still reside on
+        # CPU while PhysX returns CUDA tensors, causing a device mismatch
+        # in quat_apply.  Guard against this by migrating the buffers once.
+        _imu = self._imu_robot
+        _sensor_dev = getattr(_imu, "_device", None)
+        _expected_dev = str(self.device)
+        if _sensor_dev is not None and str(_sensor_dev) != _expected_dev:
+            _imu._device = _expected_dev
+            for attr in (
+                "_offset_pos_b",
+                "_offset_quat_b",
+                "_gravity_bias_w",
+                "GRAVITY_VEC_W",
+            ):
+                t = getattr(_imu, attr, None)
+                if isinstance(t, torch.Tensor) and str(t.device) != _expected_dev:
+                    setattr(_imu, attr, t.to(_expected_dev))
+            d = getattr(_imu, "_data", None)
+            if d is not None:
+                for field_name in ("pos_w", "quat_w", "lin_vel_b", "ang_vel_b",
+                                    "lin_acc_b", "ang_vel_w", "projected_gravity_b"):
+                    t = getattr(d, field_name, None)
+                    if isinstance(t, torch.Tensor) and str(t.device) != _expected_dev:
+                        setattr(d, field_name, t.to(_expected_dev))
+
+        # Sanitize sensor data to prevent NaN/Inf propagation into the
+        # observation pipeline and camera rendering (Warp CUDA kernels).
+        # Unsanitized NaN/Inf is the primary cause of:
+        #   "Warp CUDA error 700: an illegal memory access was encountered"
+        imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
+        imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b, nan=0.0, posinf=0.0, neginf=0.0)
+        joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
+        joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc, nan=0.0, posinf=0.0, neginf=0.0)
+        joint_applied_torque_robot = torch.nan_to_num(self._robot.data.applied_torque, nan=0.0, posinf=0.0, neginf=0.0)
 
         return _compute_step_return(
             ## Time
@@ -132,25 +159,25 @@ class LocomotionTask(Task):
             # Root
             tf_quat_robot=self._robot.data.root_quat_w,
             tf_pos_robot=self._robot.data.root_pos_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
-            projected_gravity_robot=self._robot.data.projected_gravity_b,
+            vel_lin_robot=vel_lin_robot,
+            vel_ang_robot=vel_ang_robot,
+            projected_gravity_robot=projected_gravity_robot,
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=joint_pos_robot,
             joint_pos_limits_robot=(
                 self._robot.data.soft_joint_pos_limits
                 if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=joint_acc_robot,
+            joint_applied_torque_robot=joint_applied_torque_robot,
             # Contacts
             contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
             contact_last_air_time=self._contacts_robot.data.last_air_time,  # type: ignore
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=imu_lin_acc,
+            imu_ang_vel=imu_ang_vel,
             ## Robot descriptors
             robot_feet_indices=self._feet_indices,
             robot_undesired_contact_body_indices=self._undesired_contact_body_indices,

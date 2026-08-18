@@ -4,6 +4,7 @@ import shlex
 import sys
 from typing import Sequence
 
+ # Enable CUDA launch blocking for better error messages 2250
 
 def run_srb(argv: Sequence[str]) -> None:
     from srb.__main__ import main
@@ -27,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Convenience launcher for SRB VLA rollouts with visual observations.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-e", "--env", dest="env_id", default="sample_collection")
+    parser.add_argument("-e", "--env", dest="env_id", default="locomotion_velocity_tracking")  # sample_collection
     parser.add_argument(
         "--visual",
         action=argparse.BooleanOptionalAction,
@@ -36,10 +37,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prompt",
-        default="collect the sample",
+        default="walk and track the velocity command", # collect the sample
         help="Prompt sent to the VLA policy server.",
     )
-    parser.add_argument("--host", default=os.environ.get("SRB_VLA_HOST", "192.168.1.116")) # 0.0.0.0
+    parser.add_argument("--host", default=os.environ.get("SRB_VLA_HOST", "0.0.0.0")) #  192.168.1.116
     parser.add_argument(
         "--port",
         type=int,
@@ -104,13 +105,16 @@ def _build_srb_argv(args: argparse.Namespace, forwarded_args: Sequence[str]) -> 
         str(args.replan_steps),
         "--log-interval",
         str(args.log_interval),
-        "env.sample=primitive",
-        # "env.robot=ur5+robotiq_hand_e",
+        # "env.sample=primitive",
+        "env.robot=unitree_h1",  # ur5+robotiq_hand_e
         "env.camera_data_types=[rgb]",
         "env.camera_resolution=[224,224]",
+        # Increase PhysX GPU buffer sizes to prevent CUDA illegal memory access
+        # at ~2250 steps caused by buffer overflow during long-running simulations.
+        "env.malloc_scale=16.0",
         # "--headless",
         # "--video"
-        "--livestream=2",
+        # "--livestream=2",
     ]
     if args.headless:
         argv.append("--headless")

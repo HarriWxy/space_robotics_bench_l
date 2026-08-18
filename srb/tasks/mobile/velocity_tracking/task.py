@@ -66,7 +66,7 @@ class TaskCfg(GroundEnvCfg):
     events: EventCfg = EventCfg()
 
     ## Time
-    episode_length_s: float = 200.0
+    episode_length_s: float = 200.0  # steps = episode_length_s / agent_rate
     is_finite_horizon: bool = False
 
     ## Visualization
@@ -227,29 +227,12 @@ class Task(GroundEnv):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
-        # === NaN 调试检测 ===
-        _raw_data = {
-            "root_quat_w": self._robot.data.root_quat_w,
-            "root_lin_vel_b": self._robot.data.root_lin_vel_b,
-            "root_ang_vel_b": self._robot.data.root_ang_vel_b,
-            "root_pos_w": self._robot.data.root_pos_w,
-            "imu_lin_acc_b": self._imu_robot.data.lin_acc_b,
-            "imu_ang_vel_b": self._imu_robot.data.ang_vel_b,
-            "command": self._command,
-        }
-        for _name, _tensor in _raw_data.items():
-            _nan_count = torch.isnan(_tensor).sum().item()
-            _inf_count = torch.isinf(_tensor).sum().item()
-            if _nan_count > 0 or _inf_count > 0:
-                _nan_envs = torch.any(torch.isnan(_tensor).reshape(_tensor.shape[0], -1), dim=1).nonzero(as_tuple=True)[0]
-                print(f"[NaN DEBUG] {_name}: {_nan_count} NaN, {_inf_count} Inf | bad_envs={_nan_envs[:10].tolist()} | sample={_tensor[_nan_envs[0]].tolist() if len(_nan_envs) > 0 else 'N/A'}")
-
-        # # Sanitize IMU data to prevent NaN propagation
-        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # # Sanitize velocity data
-        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # Sanitize sensor data to prevent NaN/Inf propagation into the
+        # observation pipeline and camera rendering (Warp CUDA kernels).
+        imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
+        imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
 
         return _compute_step_return(
             ## Time
@@ -263,11 +246,11 @@ class Task(GroundEnv):
             # Root
             tf_quat_robot=self._robot.data.root_quat_w,
             tf_pos_robot=self._robot.data.root_pos_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
+            vel_lin_robot=vel_lin_robot,
+            vel_ang_robot=vel_ang_robot,
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=imu_lin_acc,
+            imu_ang_vel=imu_ang_vel,
             ## Command
             command=self._command,
         )

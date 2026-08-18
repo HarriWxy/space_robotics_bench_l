@@ -189,6 +189,7 @@ def main(args: Args) -> None:
                 obs, _ = env.reset()
 
                 action_plan: collections.deque[np.ndarray] = collections.deque()
+                last_reward = 0.0
 
                 for step in range(args.max_steps):
                     # 1) 构建 LeRobot frame
@@ -210,7 +211,9 @@ def main(args: Args) -> None:
 
                     # 2) 推理获取动作
                     if not action_plan:
+                        obs["reward"] = last_reward
                         result = client.infer(_prepare_request(obs, args.prompt))
+                        last_reward = 0.0
                         action_chunk = np.asarray(result["actions"], dtype=np.float32)
                         if action_chunk.ndim != 2:
                             raise ValueError(f"Expected action chunk with 2 dims, got {action_chunk.shape}")
@@ -228,6 +231,7 @@ def main(args: Args) -> None:
 
                     # 4) 执行动作
                     obs, reward, terminated, truncated, _ = env.step(action[None, ...])
+                    last_reward = float(np.asarray(_to_numpy(reward)).reshape(-1)[0])
 
                     if terminated or truncated:
                         logging.info("Episode %d finished at step %d", ep_id, step)

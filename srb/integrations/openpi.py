@@ -1,5 +1,7 @@
 import collections
+import gc
 import os
+import socket
 import sys
 import time
 from importlib.util import find_spec
@@ -11,14 +13,23 @@ import numpy as np
 import torch
 
 
+def _check_server_reachable(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Quick TCP probe to check if the VLA server is reachable."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
 def _to_numpy(value) -> np.ndarray:
     if hasattr(value, "detach"):
-        value = value.detach().cpu().numpy()
+        value = value.detach().contiguous().cpu().numpy()
     else:
-        value = np.asarray(value)
+        value = np.asarray(value)  # if value is already a numpy array, this will be a no-opeartion
 
-    if value.ndim > 0 and value.shape[0] == 1:
-        value = value[0]
+    # if value.ndim > 0 and value.shape[0] == 1:
+    #     value = value[0]
     return value
 
 
@@ -119,10 +130,12 @@ def run_vla_rollout(
 
         from srb.utils.hydra.sim import hydra_task_config
 
-        from omni.physx import acquire_physx_interface
+        from omni.physx import get_physx_interface
 
         env_id = _resolve_visual_env_id(env_id)
-        acquire_physx_interface().overwrite_gpu_setting(1)
+        # overwrite_gpu_setting values: -1=Schema Based, 0=Force CPU, 1=Force GPU
+        # launcher.device_id is the CUDA device index (0 for cuda:0), NOT the overwrite value!
+        get_physx_interface().overwrite_gpu_setting(1 if "cuda" in device else 0)
         if hide_ui and not resolved_headless:
             hide_isaacsim_ui()
 
@@ -136,106 +149,188 @@ def run_vla_rollout(
             config_path=config_path.as_posix() if config_path else None,
         )
         def hydra_main(env_cfg: Dict[str, Any], agent_cfg: Dict[str, Any] | None = None):
+            import traceback as _tb
             import gymnasium
             from openpi_client import websocket_client_policy as _websocket_client_policy
 
-            env_cfg.seed = seed
-            env_cfg.num_envs = 1
-            env_cfg.scene.num_envs = 1
-            env_cfg.sim.device = device
+            try:
+                env_cfg.seed = seed
+                env_cfg.num_envs = 1
+                env_cfg.scene.num_envs = 1
+                env_cfg.sim.device = device
 
-            env = gymnasium.make(id=env_id, cfg=env_cfg)
+                env = gymnasium.make(id=env_id, cfg=env_cfg, render_mode="rgb_array")
+                env.reset(seed=seed)
 
-            # ── 同步重连推理循环（不使用 asyncio，避免与 Isaac Sim 事件循环冲突）─
-            while True:
-                try:
-                    # 1. 建立/重连 WebSocket
-                    logging.info("Connecting to VLA server %s:%d ...", host, port)
-                    client = _websocket_client_policy.WebsocketClientPolicy(host, port)
-                    logging.info("Server metadata: %s", client.get_server_metadata())
+                # ── 同步重连推理循环（不使用 asyncio，避免与 Isaac Sim 事件循环冲突）─
+                _cuda_fatal = False  # Flag: CUDA context corrupted beyond recovery
+                _max_connect_attempts = 30  # 最大连接尝试次数
 
-                    # 2. 初始化环境状态
-                    obs, _ = env.reset()
-                    action_plan: collections.deque[np.ndarray] = collections.deque()
-                    episode_idx = 0
-                    step = 0
+                while not _cuda_fatal:
+                    try:
+                        # 1. 建立/重连 WebSocket
+                        logging.info("Connecting to VLA server %s:%d ...", host, port)
 
-                    # 3. 推理循环
-                    while step < max_steps:
-                        if not action_plan:
-                            obs["done"] = False
-                            result = client.infer(_prepare_request(obs, prompt))
-                            action_chunk = np.asarray(result["actions"], dtype=np.float32)
-                            if action_chunk.ndim != 2:
+                        # 先做快速 TCP 探测，避免 WebsocketClientPolicy 内部无限等待
+                        if not _check_server_reachable(host, port, timeout=5.0):
+                            logging.warning(
+                                "VLA server %s:%d is not reachable. "
+                                "Please start the server first, then re-run this script.",
+                                host,
+                                port,
+                            )
+                            # break
+                            time.sleep(5)  # 等待一段时间再尝试连接
+
+                        client = _websocket_client_policy.WebsocketClientPolicy(host, port)
+                        logging.info("Server metadata: %s", client.get_server_metadata())
+
+                        # 2. 初始化环境状态
+                        obs, _ = env.reset()
+                        action_plan: collections.deque[np.ndarray] = collections.deque()
+                        episode_idx = 0
+                        step = 0
+                        last_reward = np.array([0.0])
+
+                        # 3. 推理循环
+                        while step < max_steps:
+                            if not action_plan:
+                                obs["done"] = False
+                                obs["reward"] = last_reward
+                                result = client.infer(_prepare_request(obs, prompt))
+                                last_reward = np.array([0.0])
+                                action_chunk = np.asarray(result["actions"], dtype=np.float32)
+                                if action_chunk.ndim != 2:
+                                    raise ValueError(
+                                        f"Expected action chunk with 2 dims, got {action_chunk.shape}"
+                                    )
+                                if len(action_chunk) < replan_steps:
+                                    raise ValueError(
+                                        f"Need at least {replan_steps} planned actions, got {len(action_chunk)}"
+                                    )
+                                action_plan.extend(action_chunk[:replan_steps])
+
+                            action = np.asarray(action_plan.popleft(), dtype=np.float32)
+                            expected_action_dim = int(env.unwrapped.single_action_space.shape[0])
+                            if action.shape[-1] != expected_action_dim:
                                 raise ValueError(
-                                    f"Expected action chunk with 2 dims, got {action_chunk.shape}"
+                                    f"Policy produced action dim {action.shape[-1]}, but SRB env expects {expected_action_dim}. "
+                                    "Update SRBDataConfig.action_dim to match the environment action space."
                                 )
-                            if len(action_chunk) < replan_steps:
-                                raise ValueError(
-                                    f"Need at least {replan_steps} planned actions, got {len(action_chunk)}"
+
+                            # Validate action: NaN/Inf values can cause physics explosions
+                            # that lead to Warp CUDA illegal memory access errors.
+                            if not np.all(np.isfinite(action)):
+                                logging.warning(
+                                    "Non-finite action detected at step %d, clamping to zero.", step
                                 )
-                            action_plan.extend(action_chunk[:replan_steps])
+                                action = np.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0)
 
-                        action = np.asarray(action_plan.popleft(), dtype=np.float32)
-                        expected_action_dim = int(env.unwrapped.single_action_space.shape[0])
-                        if action.shape[-1] != expected_action_dim:
-                            raise ValueError(
-                                f"Policy produced action dim {action.shape[-1]}, but SRB env expects {expected_action_dim}. "
-                                "Update SRBDataConfig.action_dim to match the environment action space."
-                            )
-                        low = np.asarray(env.unwrapped.single_action_space.low, dtype=np.float32)
-                        high = np.asarray(env.unwrapped.single_action_space.high, dtype=np.float32)
-                        action = np.clip(action, low, high)
-                        action_tensor = torch.as_tensor(
-                            action[None, ...],
-                            device=env.unwrapped.device,
-                            dtype=torch.float32,
-                        )
-
-                        obs, reward, terminated, truncated, _ = env.step(action_tensor)
-
-                        if step % max(1, log_interval) == 0:
-                            logging.info(
-                                "step=%d reward=%.4f terminated=%s truncated=%s",
-                                step,
-                                float(np.asarray(_to_numpy(reward)).reshape(-1)[0]),
-                                _to_bool(terminated),
-                                _to_bool(truncated),
+                            low = np.asarray(env.unwrapped.single_action_space.low, dtype=np.float32)
+                            high = np.asarray(env.unwrapped.single_action_space.high, dtype=np.float32)
+                            action = np.clip(action, low, high)
+                            action_tensor = torch.as_tensor(
+                                action[None, ...],
+                                device=env.unwrapped.device,
+                                dtype=torch.float32,
                             )
 
-                        if _to_bool(terminated) or _to_bool(truncated):
-                            logging.info(
-                                "Episode %d finished at step %d; resetting environment",
-                                episode_idx,
-                                step,
+                            obs, reward, terminated, truncated, _ = env.step(action_tensor)
+                            last_reward = np.asarray(_to_numpy(reward)) #.reshape(-1)
+
+                            # Periodic GPU memory cleanup to prevent memory fragmentation
+                            # and Warp CUDA illegal memory access errors (typically at ~2250 steps).
+                            # This is needed because Isaac Sim's camera rendering pipeline
+                            # creates new tensors each step without explicit cleanup.
+                            if step > 0 and step % 500 == 0:
+                                torch.cuda.empty_cache()
+                                gc.collect()
+
+                            if step % max(1, log_interval) == 0:
+                                logging.info(
+                                    "step=%d reward=%.4f terminated=%s truncated=%s",
+                                    step,
+                                    float(last_reward[0]),
+                                    _to_bool(terminated),
+                                    _to_bool(truncated),
+                                )
+
+                            if _to_bool(terminated) or _to_bool(truncated):
+                                logging.info(
+                                    "Episode %d finished at step %d; resetting environment",
+                                    episode_idx,
+                                    step,
+                                )
+
+                                obs["done"] = True
+                                obs["reward"] = last_reward
+                                result = client.infer(_prepare_request(obs, prompt))
+
+                                obs, _ = env.reset()
+                                action_plan.clear()
+                                last_reward = np.array([0.0])
+                                episode_idx += 1
+
+                            step += 1
+
+                        if _cuda_fatal:
+                            break
+
+                        logging.info("Reached max_steps=%d, stopping.", max_steps)
+                        obs["done"] = True
+                        obs["reward"] = last_reward
+                        client.infer(_prepare_request(obs, prompt))
+                        # break  # 正常结束
+
+                    except KeyboardInterrupt:
+                        obs["done"] = True
+                        obs["reward"] = last_reward
+                        client.infer(_prepare_request(obs, prompt))
+                        logging.info("Interrupted by user.")
+                        break
+
+                    except RuntimeError as e:
+                        # Catch CUDA runtime errors specifically — the CUDA context may
+                        # be corrupted (Warp errors cascade: kernel→stream→sync→free).
+                        if "illegal memory access" in str(e) or "CUDA error" in str(e):
+                            logging.error("CUDA error caught: %s", e)
+                            logging.error(
+                                "The Isaac Sim CUDA context is corrupted and cannot be recovered. "
+                                "This is typically caused by physics simulation instability (NaN/Inf "
+                                "propagation) or a Warp rendering pipeline bug."
                             )
+                            _cuda_fatal = True
+                            break
+                        _max_connect_attempts -= 1
+                        if _max_connect_attempts <= 0:
+                            logging.error("Max reconnection attempts reached. Exiting.")
+                            break
+                        logging.warning("Connection lost or error: %s — reconnecting in 5s... (%d attempts left)", e, _max_connect_attempts)
+                        time.sleep(5)
 
-                            obs["done"] = True
-                            result = client.infer(_prepare_request(obs, prompt))
+                    except Exception as e:
+                        _max_connect_attempts -= 1
+                        if _max_connect_attempts <= 0:
+                            logging.error("Max reconnection attempts reached. Exiting.")
+                            break
+                        logging.warning("Connection lost or error: %s — reconnecting in 5s... (%d attempts left)", e, _max_connect_attempts)
+                        time.sleep(5)
 
-                            obs, _ = env.reset()
-                            action_plan.clear()
-                            episode_idx += 1
+                if _cuda_fatal:
+                    logging.error(
+                        "Exiting due to unrecoverable CUDA error. Suggestions:\n"
+                        "  1. Run with CUDA_LAUNCH_BLOCKING=1 to get a precise error stacktrace.\n"
+                        "  2. Reduce camera resolution or disable cameras to isolate the issue.\n"
+                        "  3. Check if the physics simulation is producing NaN/Inf (robot explosion).\n"
+                        "  4. Ensure the NVIDIA driver and CUDA toolkit versions match Isaac Sim requirements."
+                    )
 
-                        step += 1
+                # finally:
+                env.close()
 
-                    logging.info("Reached max_steps=%d, stopping.", max_steps)
-                    obs["done"] = True
-                    client.infer(_prepare_request(obs, prompt))
-                    break  # 正常结束
-
-                except KeyboardInterrupt:
-                    obs["done"] = True
-                    client.infer(_prepare_request(obs, prompt))
-                    logging.info("Interrupted by user.")
-                    break
-
-                except Exception as e:
-                    logging.warning("Connection lost or error: %s — reconnecting in 5s...", e)
-                    time.sleep(1)
-
-            # finally:
-            env.close()
+            except Exception:
+                _tb.print_exc()
+                raise
 
         hydra_main()
     finally:
