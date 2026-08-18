@@ -3,7 +3,7 @@ import functools
 import importlib
 import string
 import sys
-from dataclasses import is_dataclass
+from dataclasses import fields, is_dataclass
 from importlib.util import find_spec
 from pathlib import Path
 from typing import (
@@ -116,7 +116,6 @@ def hydra_task_config(
                 config_name=task_name.rsplit("/", 1)[1]
                 if config_path is None
                 else config_path.stem,
-                version_base=None,
             )
             def hydra_main(
                 hydra_env_cfg: DictConfig, env_cfg=env_cfg, agent_cfg=agent_cfg
@@ -405,14 +404,9 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
 
         # Dataclass
         if is_dataclass(obj):
-            try:
-                type_hints = get_type_hints(obj.__class__)  # type: ignore
-            except Exception:
-                type_hints = {k: type(v) for k, v in obj.__dict__.items()}
             new_kwargs = {}
-            for field_name, field_type in type_hints.items():
-                if field_name.startswith("__"):
-                    continue
+            for field in fields(obj):
+                field_name = field.name
                 current_value = getattr(obj, field_name, None)
                 update_value = updates.get(field_name, None)  # type: ignore
                 if update_value is not None:

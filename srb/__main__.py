@@ -120,6 +120,8 @@ def run_agent_with_env(
     from srb.core.app import AppLauncher
 
     # Preprocess kwargs
+    if not headless:
+        kwargs["visualizer"] = ["kit"]
     kwargs["enable_cameras"] = video_enable or env_id.endswith("_visual")
     kwargs["experience"] = SRB_APPS_DIR.joinpath(
         f"srb.{'headless.' if headless else ''}{'rendering.' if kwargs['enable_cameras'] else ''}{'xr.' if kwargs['xr'] else ''}kit"

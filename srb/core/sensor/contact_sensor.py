@@ -1,7 +1,7 @@
 # Note: This file patches the ContactSensor class to support `filter_prim_paths_expr` at any level of the hierarchy
 
 import isaaclab.sim as sim_utils
-import omni.physics.tensors.impl.api as physx
+import omni.physics.tensors as physx
 import torch
 from isaaclab.sensors import ContactSensor, ContactSensorCfg  # noqa: F401
 from pxr import UsdPhysics

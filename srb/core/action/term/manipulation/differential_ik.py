@@ -42,9 +42,9 @@ class DifferentialInverseKinematicsAction(__DifferentialInverseKinematicsAction)
         jacobian = self.jacobian_w
 
         if self._base_idx:
-            base_quat_w = self._asset.data.body_quat_w[:, self._base_idx]
+            base_quat_w = self._asset.data.body_quat_w.torch[:, self._base_idx]
         else:
-            base_quat_w = self._asset.data.root_quat_w
+            base_quat_w = self._asset.data.root_quat_w.torch
 
         base_rot_matrix = math_utils.matrix_from_quat(math_utils.quat_inv(base_quat_w))
         jacobian[:, :3, :] = torch.bmm(base_rot_matrix, jacobian[:, :3, :])

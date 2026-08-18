@@ -10,9 +10,9 @@ First, clone the SRB repository with all submodules:
 git clone --recurse-submodules https://github.com/AndrejOrsula/space_robotics_bench.git
 ```
 
-## 2. Install NVIDIA Isaac Sim 5.0
+## 2. Install NVIDIA Isaac Sim 6.0
 
-> Official instructions: [Isaac Sim — Workstation Installation](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/installation/install_workstation.html)
+> Official instructions: [Isaac Sim — Workstation Installation](https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/install_workstation.html)
 
 Install Isaac Sim either by following the official instructions above or using the provided convenience [script](https://github.com/AndrejOrsula/space_robotics_bench/blob/main/scripts/install_isaacsim.bash):
 
@@ -44,9 +44,9 @@ source ~/.zshrc
 set -Ux ISAAC_SIM_PYTHON "$HOME/isaac-sim/python.sh"
 ```
 
-## 3. Install NVIDIA Isaac Lab 2.2
+## 3. Install NVIDIA Isaac Lab 3.0
 
-> Official instructions: [Isaac Lab — Installation](https://isaac-sim.github.io/IsaacLab/v2.2.1/source/setup/installation/binaries_installation.html#installing-isaac-lab)
+> Official instructions: [Isaac Lab — Installation](https://isaac-sim.github.io/IsaacLab/v3.0.0-beta2/source/setup/installation/binaries_installation.html#installing-isaac-lab)
 
 Install Isaac Lab either by following the official instructions above or using the provided convenience [script](https://github.com/AndrejOrsula/space_robotics_bench/blob/main/scripts/install_isaaclab.bash):
 
