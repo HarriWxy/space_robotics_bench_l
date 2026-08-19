@@ -113,6 +113,9 @@ def run_vla_rollout(
     from srb.utils.isaacsim import hide_isaacsim_ui
     from srb.utils.path import SRB_APPS_DIR
 
+        # Preprocess kwargs
+    if not headless:
+        kwargs["visualizer"] = ["kit"]
     resolved_headless = headless or not os.environ.get("DISPLAY")
     if resolved_headless != headless:
         logging.warning(
