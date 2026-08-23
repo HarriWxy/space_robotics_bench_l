@@ -22,6 +22,7 @@ from typing import (
 
 from pxr import Usd
 from isaaclab.assets import Articulation, DeformableObject, RigidObject
+from isaaclab.markers import VisualizationMarkers
 from pydantic import BaseModel, PositiveFloat
 from simforge import BlGeometry, BlModel, BlShader, TexResConfig
 
@@ -50,6 +51,7 @@ _PYDANTIC_TYPES_NAMESPACE = {
     "DeformableObject": DeformableObject,
     "RigidObject": RigidObject,
     "SpawnerCfg": SpawnerCfg,
+    "VisualizationMarkers": VisualizationMarkers,
     "Usd": Usd,
     "Literal": Literal,
     "InitialStateCfg": AssetBaseCfg.InitialStateCfg,

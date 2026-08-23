@@ -2,6 +2,8 @@ import logging
 from itertools import chain
 from typing import TYPE_CHECKING, Dict, List, Sequence, Tuple
 
+from isaaclab.assets import AssetBaseCfg
+import isaaclab.sim as sim_utils
 import torch
 import torch.nn.functional as F
 from pxr import Gf
@@ -472,22 +474,63 @@ def reset_xform_orientation_uniform(
     orientation_distribution_params: Dict[str, Tuple[float, float]],
     asset_cfg: SceneEntityCfg,
 ):
-    asset: XFormPrim = env.scene[asset_cfg.name]
+    asset:AssetBaseCfg = env.scene[asset_cfg.name]
+    temporary_view = False
+    if not hasattr(asset, "set_world_poses"):
+        # AssetBaseCfg entities (for example lights) are stored in
+        # InteractiveScene.extras and do not have a runtime XFormPrim view.
+        prim_path = getattr(asset, "prim_path", None)
+        if prim_path is None:
+            raise TypeError(
+                f"Scene entity '{asset_cfg.name}' does not expose a runtime pose API "
+                "or a prim_path."
+            )
+        asset = XFormPrim(
+            prim_paths_expr=prim_path,
+            name=f"{asset_cfg.name}_event_xform",
+            reset_xform_properties=False,
+        )
+        temporary_view = True
 
-    range_list = [
-        orientation_distribution_params.get(key, (0.0, 0.0))
-        for key in ["roll", "pitch", "yaw"]
-    ]
-    ranges = torch.tensor(range_list, device=asset._device)
-    rand_samples = sample_uniform(
-        ranges[:, 0], ranges[:, 1], (1, 3), device=asset._device
-    )
+    try:
+        device = getattr(asset, "_device", None) or env.device
+        range_list = [
+            orientation_distribution_params.get(key, (0.0, 0.0))
+            for key in ["roll", "pitch", "yaw"]
+        ]
+        ranges = torch.tensor(range_list, device=device)
+        rand_samples = sample_uniform(
+            ranges[:, 0], ranges[:, 1], (1, 3), device=device
+        )
 
-    orientations = quat_from_euler_xyz(
-        rand_samples[:, 0], rand_samples[:, 1], rand_samples[:, 2]
-    )
+        orientations = quat_from_euler_xyz(
+            rand_samples[:, 0], rand_samples[:, 1], rand_samples[:, 2]
+        )
 
-    asset.set_world_poses(orientations=orientations)
+        # IsaacLab math utilities use (x, y, z, w), while the legacy
+        # IsaacSim XFormPrim wrapper expects scalar-first (w, x, y, z).
+        asset.set_world_poses(orientations=orientations[:, [3, 0, 1, 2]].cpu())
+    finally:
+        if temporary_view:
+            asset.destroy()
+
+
+def _get_usd_asset_prims(env: "AnyEnv", asset_cfg: SceneEntityCfg):
+    """Return prims for both runtime XFormPrim views and static AssetBaseCfgs."""
+    asset = env.scene[asset_cfg.name]
+    prims = getattr(asset, "prims", None)
+    if prims is not None:
+        return prims
+
+    prim_path = getattr(asset, "prim_path", None)
+    if prim_path is None:
+        raise TypeError(
+            f"Scene entity '{asset_cfg.name}' does not expose prims or a prim_path."
+        )
+
+    stage = env.sim.stage
+    prim_paths = sim_utils.find_matching_prim_paths(prim_path, stage=stage)
+    return [stage.GetPrimAtPath(path) for path in prim_paths]
 
 
 def randomize_usd_prim_attribute_uniform(
@@ -497,7 +540,13 @@ def randomize_usd_prim_attribute_uniform(
     distribution_params: Tuple[float | Sequence[float], float | Sequence[float]],
     asset_cfg: SceneEntityCfg,
 ):
-    asset: XFormPrim = env.scene[asset_cfg.name]
+    prims = _get_usd_asset_prims(env, asset_cfg)
+    env_id_set = (
+        None
+        if env_ids is None
+        else {int(env_id) for env_id in env_ids.detach().cpu().tolist()}
+    )
+    per_env_prims = len(prims) == env.scene.num_envs
     if isinstance(distribution_params[0], Sequence):
         dist_len = len(distribution_params[0])
         distribution_params = (  # type: ignore
@@ -506,8 +555,8 @@ def randomize_usd_prim_attribute_uniform(
         )
     else:
         dist_len = 1
-    for i, prim in enumerate(asset.prims):
-        if env_ids is not None and i not in env_ids:
+    for i, prim in enumerate(prims):
+        if per_env_prims and env_id_set is not None and i not in env_id_set:
             continue
         value = sample_uniform(
             distribution_params[0],  # type: ignore

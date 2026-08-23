@@ -161,6 +161,9 @@ class Task(GroundEnv):
         marker_scale = torch.ones(
             (self.cfg.scene.num_envs, 3), dtype=torch.float32, device=self.device
         )
+        environment_ids = torch.arange(
+            self.num_envs, dtype=torch.int32, device=self.device
+        )
         marker_pos[:, :2] = robot_pos_w[:, :2]
 
         ## Target linear velocity
@@ -168,8 +171,9 @@ class Task(GroundEnv):
         marker_heading = self._robot.data.heading_w + torch.atan2(
             self._command[:, 1], self._command[:, 0]
         )
-        marker_orientation[:, 0] = torch.cos(marker_heading * 0.5)
-        marker_orientation[:, 3] = torch.sin(marker_heading * 0.5)
+        # VisualizationMarkers expects quaternions in xyzw order.
+        marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
         marker_scale[:, 0] = torch.norm(
             torch.stack(
                 (self._command[:, 0], self._command[:, 1]),
@@ -178,7 +182,10 @@ class Task(GroundEnv):
             dim=-1,
         )
         self._marker_target_linvel.visualize(
-            marker_pos, marker_orientation, marker_scale
+            translations=marker_pos,
+            orientations=marker_orientation,
+            scales=marker_scale,
+            environment_ids=environment_ids,
         )
 
         ## Robot linear velocity
@@ -186,11 +193,14 @@ class Task(GroundEnv):
             self._robot.data.root_lin_vel_b[:, 1],
             self._robot.data.root_lin_vel_b[:, 0],
         )
-        marker_orientation[:, 0] = torch.cos(marker_heading * 0.5)
-        marker_orientation[:, 3] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
         marker_scale[:, 0] = torch.norm(self._robot.data.root_lin_vel_b[:, :2], dim=-1)
         self._marker_robot_linvel.visualize(
-            marker_pos, marker_orientation, marker_scale
+            translations=marker_pos,
+            orientations=marker_orientation,
+            scales=marker_scale,
+            environment_ids=environment_ids,
         )
 
         ## Target angular velocity
@@ -204,11 +214,14 @@ class Task(GroundEnv):
         marker_heading = (
             self._robot.data.heading_w + normalization_fac * self._command[:, 2]
         )
-        marker_orientation[:, 0] = torch.cos(marker_heading * 0.5)
-        marker_orientation[:, 3] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
         marker_scale[:, 0] = 1.0
         self._marker_target_angvel.visualize(
-            marker_pos, marker_orientation, marker_scale
+            translations=marker_pos,
+            orientations=marker_orientation,
+            scales=marker_scale,
+            environment_ids=environment_ids,
         )
 
         ## Robot angular velocity
@@ -216,11 +229,14 @@ class Task(GroundEnv):
             self._robot.data.heading_w
             + normalization_fac * self._robot.data.root_ang_vel_w[:, -1]
         )
-        marker_orientation[:, 0] = torch.cos(marker_heading * 0.5)
-        marker_orientation[:, 3] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
+        marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
         marker_scale[:, 0] = 1.0
         self._marker_robot_angvel.visualize(
-            marker_pos, marker_orientation, marker_scale
+            translations=marker_pos,
+            orientations=marker_orientation,
+            scales=marker_scale,
+            environment_ids=environment_ids,
         )
 
     def extract_step_return(self) -> StepReturn:

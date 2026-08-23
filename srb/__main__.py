@@ -140,6 +140,12 @@ def run_agent_with_env(
     from srb.utils.cfg import DEFAULT_DATETIME_FORMAT, last_logdir, new_logdir
     from srb.utils.hydra.sim import hydra_task_config
     from srb.utils.isaacsim import hide_isaacsim_ui
+    from srb.core.sim import RenderCfg, apply_isaac_rtx_global_settings
+
+    apply_isaac_rtx_global_settings(RenderCfg(
+        enable_translucency=True,
+        enable_reflections=True,
+    ))
 
     # Post-launch configuration
     get_physx_interface().overwrite_gpu_setting(1)

@@ -14,6 +14,10 @@ from isaaclab_physx.sim.spawners.materials import (
     )
 
 from isaaclab_physx.physics import PhysxCfg  # noqa: F401
+from isaaclab_physx.renderers import IsaacRtxRendererGlobalSettingsCfg as RenderCfg
+from isaaclab_physx.renderers.isaac_rtx_renderer_utils import (
+    apply_isaac_rtx_global_settings,
+)
 
 
 from .schemas import *  # noqa: F403

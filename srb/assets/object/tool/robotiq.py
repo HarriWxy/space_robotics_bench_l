@@ -19,6 +19,7 @@ class RobotiqHandE(ActiveTool):
     asset_cfg: ArticulationCfg = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/robotiq_hand_e",
         spawn=UsdFileCfg(
+            make_uninstanceable=True,
             usd_path=SRB_ASSETS_DIR_SRB_ROBOT.joinpath("gripper")
             .joinpath("robotiq_hand_e.usdz")
             .as_posix(),

@@ -44,7 +44,6 @@ from srb.core.sim import (
     ParticlesSpawnerCfg,
     PhysxCfg,
     PyramidParticlesSpawnerCfg,
-    RenderCfg,
     RigidBodyMaterialCfg,
     SimforgeAssetCfg,
     SimulationCfg,
@@ -118,10 +117,6 @@ class BaseEnvCfg:
             restitution=0.0,
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
-        ),
-        render=RenderCfg(
-            enable_translucency=True,
-            enable_reflections=True,
         ),
     )
     malloc_scale: float = 2.0

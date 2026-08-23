@@ -152,9 +152,9 @@ class Task(ManipulationEnv):
         if self._scenery is None:
             return None
 
-        prim_paths = self._scenery.prim_paths
-        if prim_paths:
-            return prim_paths[0]
+        # Static sceneries are stored by InteractiveScene as AssetBaseCfg
+        # extras.  They do not expose the runtime-view ``prim_paths`` field.
+        prim_paths = getattr(self._scenery, "prim_paths", None)
 
         scenery_cfg = getattr(getattr(self.cfg, "scene", None), "scenery", None)
         scenery_path = getattr(scenery_cfg, "prim_path", "")
@@ -163,17 +163,54 @@ class Task(ManipulationEnv):
         if not scenery_path:
             usd_view = getattr(self._scenery, "_usd_view", None)
             scenery_path = getattr(usd_view, "_prim_path", "")
-        if not scenery_path:
+        if not scenery_path and not prim_paths:
             return None
 
         import isaaclab.sim as sim_utils
 
-        scenery_path_regex = (
-            scenery_path if scenery_path.endswith(".*") else f"{scenery_path}.*"
+        # The configured scenery path can be an empty container created by the
+        # scene/cloner.  SimForge may put the actual USD mesh below that
+        # container (or at a numbered sibling such as ``scenery_0``), so do
+        # not return the container itself as a terrain path.
+        matching_paths: list[str] = []
+        base_paths = list(prim_paths or ())
+        if scenery_path:
+            base_paths.append(scenery_path)
+        if not base_paths:
+            return None
+
+        path_expressions: list[str] = []
+        for base_path in base_paths:
+            if base_path not in path_expressions:
+                path_expressions.append(base_path)
+            scenery_path_regex = (
+                base_path
+                if base_path.endswith(".*")
+                else f"{base_path}.*"
+            )
+            if scenery_path_regex not in path_expressions:
+                path_expressions.append(scenery_path_regex)
+
+        for path_expression in path_expressions:
+            for matching_path in sim_utils.find_matching_prim_paths(path_expression):
+                if matching_path not in matching_paths:
+                    matching_paths.append(matching_path)
+
+        stage = sim_utils.get_current_stage()
+        terrain_paths = [
+            matching_path
+            for matching_path in matching_paths
+            if stage.GetPrimAtPath(matching_path).GetTypeName() in {"Plane", "Mesh"}
+        ]
+        if not terrain_paths:
+            # During DirectEnv.__post_init__ the generated USD may not have
+            # been composed yet.  The next reset will probe the stage again.
+            return None
+
+        return next(
+            (path for path in terrain_paths if "/env_0/" in path),
+            terrain_paths[0],
         )
-        matching_paths = sim_utils.find_matching_prim_paths(scenery_path_regex)
-        self._scenery.prim_paths.extend(matching_paths)
-        return matching_paths[0] if matching_paths else None
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)

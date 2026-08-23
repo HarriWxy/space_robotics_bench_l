@@ -21,6 +21,10 @@ class UnitreeH1(Humanoid):
         prim_path="{ENV_REGEX_NS}/unitree_h1",
         spawn=UsdFileCfg(
             usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/H1/h1.usd",
+            # H1's USD contains instanceable collision meshes.  Disable USD
+            # instancing before applying collision overrides so that
+            # contact_offset and rest_offset are authored on the colliders.
+            make_uninstanceable=True,
             activate_contact_sensors=True,
             collision_props=CollisionPropertiesCfg(
                 contact_offset=0.005, rest_offset=0.0

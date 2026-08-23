@@ -33,9 +33,9 @@ class UR3(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3/ur3.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -176,9 +176,9 @@ class UR3e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3e/ur3e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -319,9 +319,9 @@ class UR5(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5/ur5.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -466,9 +466,9 @@ class UR5e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -645,9 +645,9 @@ class UR10(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/UniversalRobots/UR10/ur10_instanceable.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -791,9 +791,9 @@ class UR10e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur10e/ur10e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -934,9 +934,9 @@ class UR16e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur16e/ur16e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -1077,9 +1077,9 @@ class UR20(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur20/ur20.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -1220,9 +1220,9 @@ class UR30(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur30/ur30.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
