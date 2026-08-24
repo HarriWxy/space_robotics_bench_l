@@ -2,6 +2,10 @@ from srb.utils.registry import register_srb_tasks
 
 from .task import Task, TaskCfg
 from .task_locomotion import LocomotionTask, LocomotionTaskCfg
+from .task_locomotion_c import (
+    LocomotionTask as CurriculumLocomotionTask,
+    LocomotionTaskCfg as CurriculumLocomotionTaskCfg,
+)
 from .task_visual import (
     VisualLocomotionTask,
     VisualLocomotionTaskCfg,
@@ -20,6 +24,10 @@ register_srb_tasks(
         f"locomotion_{BASE_TASK_NAME}": {
             "entry_point": LocomotionTask,
             "task_cfg": LocomotionTaskCfg,
+        },
+        f"locomotion_{BASE_TASK_NAME}_c": {
+            "entry_point": CurriculumLocomotionTask,
+            "task_cfg": CurriculumLocomotionTaskCfg,
         },
         f"locomotion_{BASE_TASK_NAME}_visual": {
             "entry_point": VisualLocomotionTask,

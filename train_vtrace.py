@@ -16,13 +16,13 @@ if __name__ == "__main__":
     # print(os.environ["EXP_PATH"])
     run_srb([
         "agent",
-        # "train",
+        "train",
         # "eval",
-        "rand",
-        # "--algo",
-        # "sb3_ppo", # policyflow
+        # "rand",
+        "--algo",
+        "sb3_ppo", # policyflow
         "--env",
-        "locomotion_velocity_tracking",
+        "locomotion_velocity_tracking_c",
         # "--cfg",
         # "IGNORE",
         "env.domain=moon",
@@ -31,9 +31,9 @@ if __name__ == "__main__":
         # "env.stage=2",
         # "env.stage2_easy=True",
         # "env.episode_length_s=8.0",
-        "env.num_envs=2",
+        "env.num_envs=256",
         "env.sim.device=cuda",
-        # "--headless",
+        "--headless",
         # "--model=./logs/sample_collection/sbx_td3/20260527T092754/ckpt/srb-sample_collection.zip",
         # "--continue_training",
         # "agent.ent_coef=0.003",
