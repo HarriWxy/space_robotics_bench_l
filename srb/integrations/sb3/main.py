@@ -33,6 +33,7 @@ def run(
     logdir: Path,
     model: Path,
     continue_training: bool | None = None,
+    untrained: bool = False,
     **kwargs,
 ):
     ## Extract params from agent_cfg
@@ -57,13 +58,16 @@ def run(
     # Pop the entire smoothing config dictionary to be handled separately.
     smoothing_cfg = agent_cfg.pop("smoothing", {})
 
+    if untrained and model:
+        raise ValueError("--untrained cannot be combined with --model")
+
     # Determine checkpoint path
     if model:
         from_checkpoint = model
-    elif workflow == "eval" or continue_training:
+    elif (workflow == "eval" and not untrained) or continue_training:
         from_checkpoint = last_file(logdir.joinpath("ckpt"), modification_time=True)
     else:
-        from_checkpoint = ""
+        from_checkpoint = None
     if from_checkpoint:
         logging.info(f"Loading model from {from_checkpoint}")
 
@@ -105,7 +109,7 @@ def run(
         hyperparams=agent_cfg,
         trained_agent=from_checkpoint.as_posix()
         if isinstance(from_checkpoint, Path)
-        else from_checkpoint,
+        else from_checkpoint or "",
         optimize_hyperparameters=workflow == "optimize",
         n_trials=n_trials,
         sampler=sampler,
@@ -136,6 +140,7 @@ def run(
             exp_manager.setup_experiment()
             exp_manager.hyperparameters_optimization()
         case "eval":
+            n_timesteps = agent_cfg["n_timesteps"]
             env = exp_manager.create_envs(0, eval_env=True)  # type: ignore
 
             # Update agent config
@@ -146,11 +151,21 @@ def run(
             if "HerReplayBuffer" in agent_cfg.get("replay_buffer_class", ""):
                 agent_cfg["env"] = env
 
-            # Load the agent
-            agent = ALGOS[algo].load(
-                from_checkpoint.as_posix(),  # type: ignore
-                device=env.unwrapped.device,  # type: ignore
-            )
+            if untrained:
+                setup_result = exp_manager.setup_experiment()  # type: ignore
+                if setup_result is None:
+                    raise RuntimeError("Could not initialize the untrained agent")
+                agent, _saved_hyperparams = setup_result
+            else:
+                if from_checkpoint is None:
+                    raise FileNotFoundError(
+                        f"No checkpoint found in {logdir.joinpath('ckpt')}. "
+                        "Pass --model or use --untrained."
+                    )
+                agent = ALGOS[algo].load(
+                    from_checkpoint.as_posix(),
+                    device=env.unwrapped.device,  # type: ignore
+                )
 
             # Initialize the runner
             episode_start = numpy.ones(
@@ -160,7 +175,7 @@ def run(
             lstm_states = None
 
             obs = env.reset()
-            for _ in tqdm(range(agent_cfg["n_timesteps"])):
+            for _ in tqdm(range(n_timesteps)):
                 if not sim_app.is_running():
                     break
                 action, lstm_states = agent.predict(

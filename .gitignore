@@ -38,3 +38,5 @@ wandb/
 
 ## Dump files
 **/core.*
+
+.vscode
