@@ -3,11 +3,14 @@ from typing import Sequence, Tuple
 
 import torch
 
+from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import (
     Articulation,
     AssetVariant,
+    MobileRobot,
     Object,
+    Pedestal,
     RigidObject,
     RigidObjectCfg,
 )
@@ -64,6 +67,11 @@ class TaskCfg(ManipulationEnvCfg):
 
     ## Assets
     sample: Object | AssetVariant = AssetVariant.DATASET
+    # The fixed-base manipulator is anchored by its articulation root, rather
+    # than by contact with this visual mount.  Keeping the pedestal collider
+    # active can introduce a reset-time static contact at the robot base.
+    pedestal: Pedestal | MobileRobot | None = assets.IndustrialPedestal25()
+    pedestal.asset_cfg.spawn.collision_props.collision_enabled = False  # type: ignore
 
     ## Scene
     scene: SceneCfg = SceneCfg()

@@ -6,6 +6,13 @@ srb agent eval --algo sbx_ppo --env sample_collection ++agent.load_from=/root/ws
 
 Hydra 是一个开源的 Python 框架，旨在简化复杂应用程序的配置管理，特别是在深度学习和机器学习项目中。
 
+## 更新 isaaclab
+
+```bash
+cd ../isaaclab
+git pull --ff-only origin release/3.0.0
+```
+
 
 
 ## 奖励函数设置

@@ -348,7 +348,10 @@ class UR5(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
+                # Preserve the UR5 USD limit of 180 deg/s (pi rad/s).  The
+                # previous 100 rad/s solver limit lets random IK commands
+                # drive links through static terrain before contacts resolve.
+                joint_velocity_limit=deg_to_rad(180.0),
                 effort_limit_sim=87.0,
                 stiffness=800.0,
                 damping=40.0,

@@ -40,3 +40,4 @@ wandb/
 **/core.*
 
 .vscode
+.agents
