@@ -3,14 +3,13 @@ from typing import Sequence
 import torch
 
 from srb._typing import StepReturn
-from srb.core.asset import Articulation
+from srb.core.asset import BaseArticulation
 from srb.core.env import (
     GroundManipulationEnv,
     GroundManipulationEnvCfg,
     GroundManipulationEventCfg,
     GroundManipulationSceneCfg,
 )
-from srb.core.sensor import ContactSensor
 from srb.utils.cfg import configclass
 from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
 
@@ -70,46 +69,46 @@ class Task(GroundManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_pos_robot=self._robot.data.root_pos_w,
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             # Joints (manipulator)
-            joint_pos_robot=self._manipulator.data.joint_pos,
+            joint_pos_robot=self._manipulator.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._manipulator.data.soft_joint_pos_limits
+                self._manipulator.data.soft_joint_pos_limits.torch
                 if torch.all(
-                    torch.isfinite(self._manipulator.data.soft_joint_pos_limits)
+                    torch.isfinite(self._manipulator.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
+            if self._contacts_end_effector is not None
             else None,
         )
 

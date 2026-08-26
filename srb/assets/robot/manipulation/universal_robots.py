@@ -1,3 +1,4 @@
+from srb.assets.object.tool import RobotiqHandE
 from srb.core.action import (  # noqa: F401
     ActionGroup,
     DifferentialIKControllerCfg,
@@ -21,7 +22,6 @@ from srb.core.sim import (
     RigidBodyPropertiesCfg,
     UsdFileCfg,
 )
-from srb.assets.object.tool import RobotiqHandE
 from srb.utils.math import deg_to_rad, rpy_to_quat
 from srb.utils.nucleus import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
@@ -62,8 +62,8 @@ class UR3(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -205,8 +205,8 @@ class UR3e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -352,7 +352,7 @@ class UR5(SerialManipulator):
                 # previous 100 rad/s solver limit lets random IK commands
                 # drive links through static terrain before contacts resolve.
                 joint_velocity_limit=deg_to_rad(180.0),
-                effort_limit_sim=87.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -498,8 +498,8 @@ class UR5e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -677,8 +677,8 @@ class UR10(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -823,8 +823,8 @@ class UR10e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -966,8 +966,8 @@ class UR16e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1109,8 +1109,8 @@ class UR20(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1252,8 +1252,8 @@ class UR30(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),

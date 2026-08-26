@@ -11,7 +11,13 @@ from srb.core.asset import (
     RigidObject,
     RigidObjectCfg,
 )
-from srb.core.env import BaseEventCfg, BaseSceneCfg, DirectEnv, DirectEnvCfg, ViewerCfg
+from srb.core.env import (
+    BaseEventCfg,
+    BaseSceneCfg,
+    DirectEnv,
+    DirectEnvCfg,
+    KitVisualizerCfg,
+)
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import FRAME_MARKER_SMALL_CFG
 from srb.core.mdp import reset_joints_by_offset
@@ -81,7 +87,7 @@ class ManipulationEnvCfg(DirectEnvCfg):
     agent_rate: float = 1.0 / 50.0
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(1.85, 0.0, 1.85), lookat=(0.125, 0.0, 0.25), origin_type="env"
     )
 

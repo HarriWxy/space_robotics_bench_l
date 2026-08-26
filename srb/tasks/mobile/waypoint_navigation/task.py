@@ -115,7 +115,7 @@ class Task(GroundEnv):
         ## Initialize buffers
         self._goal = torch.zeros(self.num_envs, 7, device=self.device)
         self._goal[:, 0:3] = self.scene.env_origins
-        self._goal[:, 3] = 1.0
+        self._goal[:, 6] = 1.0
         self._episodic_noise_tf_pos2d = torch.zeros(
             self.num_envs, 2, device=self.device
         )
@@ -127,7 +127,7 @@ class Task(GroundEnv):
         ## Reset goal position
         self._goal[env_ids, 0:3] = self.scene.env_origins[env_ids]
         self._goal[env_ids, 3:7] = torch.tensor(
-            [1.0, 0.0, 0.0, 0.0], device=self.device
+            [0.0, 0.0, 0.0, 1.0], device=self.device
         )
 
         ## Randomize episodic noise
@@ -149,7 +149,7 @@ class Task(GroundEnv):
         ## Visualize target
         self._target_marker.visualize(self._goal[:, 0:3], self._goal[:, 3:7])
 
-        _robot_pose = self._robot.data.root_link_pose_w
+        _robot_pose = self._robot.data.root_link_pose_w.torch
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -166,8 +166,8 @@ class Task(GroundEnv):
             tf_pos_target=self._goal[:, 0:3],
             tf_quat_target=self._goal[:, 3:7],
             # # IMU
-            # imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            # imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            # imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            # imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             ## Randomization
             episodic_noise_tf_pos2d=self._episodic_noise_tf_pos2d,
             episodic_noise_tf_yaw=self._episodic_noise_tf_yaw,

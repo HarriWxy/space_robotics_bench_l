@@ -56,8 +56,8 @@ class SOArm100D5(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=10.0,
-                effort_limit_sim=10.0,
+                joint_velocity_limit=10.0,
+                joint_effort_limit=10.0,
                 stiffness=100.0,
                 damping=20.0,
             ),
@@ -162,8 +162,8 @@ class SOArm100D7(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit_sim=10.0,
-                effort_limit_sim=10.0,
+                joint_velocity_limit=10.0,
+                joint_effort_limit=10.0,
                 stiffness=100.0,
                 damping=20.0,
             ),

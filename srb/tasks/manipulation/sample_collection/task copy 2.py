@@ -5,8 +5,8 @@ import torch
 
 from srb._typing import StepReturn
 from srb.core.asset import (
-    Articulation,
     AssetVariant,
+    BaseArticulation,
     Object,
     RigidObject,
     RigidObjectCfg,
@@ -21,7 +21,7 @@ from srb.core.env import (
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers, VisualizationMarkersCfg
 from srb.core.mdp import reset_root_state_uniform
-from srb.core.sensor import ContactSensor, ContactSensorCfg
+from srb.core.sensor import ContactSensorCfg
 from srb.core.sim import PreviewSurfaceCfg, SphereCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import (
@@ -76,7 +76,7 @@ class TaskCfg(ManipulationEnvCfg):
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.5, 0.0, 0.75)
-    tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tf_quat_target: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     target_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/target",
         markers={
@@ -146,10 +146,10 @@ class Task(ManipulationEnv):
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
-        self._tf_pos_obj_initial[env_ids] = self._obj.data.root_com_pos_w[env_ids]
-        self._robot.data.joint_acc[env_ids] = 0.0
-        self._robot.data.applied_torque[env_ids] = 0.0
-        self._robot.data.joint_vel[env_ids] = 0.0
+        self._tf_pos_obj_initial[env_ids] = self._obj.data.root_com_pos_w.torch[env_ids]
+        self._robot.data.joint_acc.torch[env_ids] = 0.0
+        self._robot.actuators.applied_effort.torch[env_ids] = 0.0
+        self._robot.data.joint_vel.torch[env_ids] = 0.0
 
     def extract_step_return(self) -> StepReturn:
         return _compute_step_return(
@@ -162,43 +162,43 @@ class Task(ManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
             tf_pos_obj_initial=self._tf_pos_obj_initial,
-            tf_pos_obj=self._obj.data.root_com_pos_w,
-            tf_quat_obj=self._obj.data.root_com_quat_w,
+            tf_pos_obj=self._obj.data.root_com_pos_w.torch,
+            tf_quat_obj=self._obj.data.root_com_quat_w.torch,
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
+            if self._contacts_end_effector is not None
             else None,
         )
 
@@ -206,7 +206,7 @@ class Task(ManipulationEnv):
     #     """返回夹爪是否闭合的布尔张量（基于关节位置或动作）"""
     #     # 假设夹爪关节名称为 "Slider_[1-2]"，闭合位置为 -0.025
     #     if hasattr(self._end_effector, 'data') and self._end_effector.data is not None:
-    #         joint_pos = self._end_effector.data.joint_pos
+    #         joint_pos = self._end_effector.data.joint_pos.torch
     #         # 取平均值作为闭合程度
     #         gripper_closed = joint_pos.mean(dim=1) < -0.02
     #         return gripper_closed
@@ -221,12 +221,12 @@ class Task(ManipulationEnv):
     #     # 获取末端执行器到物体的距离（已在 extract_step_return 中计算，但这里需要实时获取）
     #     # 最简单的方式：从当前观测中提取距离。但在此方法中，可以访问 self._obj 和 self._tf_end_effector
     #     if hasattr(self, '_obj') and hasattr(self, '_tf_end_effector'):
-    #         ee_pos = self._tf_end_effector.data.target_pos_w[:, 0, :]  # (num_envs, 3)
-    #         obj_pos = self._obj.data.root_com_pos_w
+    #         ee_pos = self._tf_end_effector.data.target_pos_w.torch[:, 0, :]  # (num_envs, 3)
+    #         obj_pos = self._obj.data.root_com_pos_w.torch
     #         distance_to_obj = torch.norm(ee_pos - obj_pos, dim=1)
     #         # 也可以检查接触力
     #         if self._contacts_end_effector is not None:
-    #             contact_force = self._contacts_end_effector.data.force_matrix_w
+    #             contact_force = self._contacts_end_effector.data.force_matrix_w.torch
     #             contact_exist = torch.norm(contact_force, dim=-1).max(dim=1)[0] > 0.1
     #         else:
     #             contact_exist = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)

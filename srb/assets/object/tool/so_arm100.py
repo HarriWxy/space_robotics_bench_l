@@ -43,8 +43,8 @@ class SOArm100Gripper(ActiveTool):
         actuators={
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["Gripper"],
-                velocity_limit_sim=1.5,
-                effort_limit_sim=2.0,
+                joint_velocity_limit=1.5,
+                joint_effort_limit=2.0,
                 stiffness=10.0,
                 damping=1.0,
             ),

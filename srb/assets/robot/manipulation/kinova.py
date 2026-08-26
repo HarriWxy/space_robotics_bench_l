@@ -55,8 +55,8 @@ class KinovaJ2n6s(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=["j2n6s_joint_[1-6]"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim={
+                joint_velocity_limit=100.0,
+                joint_effort_limit={
                     "j2n6s_joint_[1-2]": 80.0,
                     "j2n6s_joint_3": 40.0,
                     "j2n6s_joint_[4-6]": 20.0,
@@ -151,8 +151,8 @@ class KinovaJ2n7s(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=["j2n7s_joint_[1-7]"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim={
+                joint_velocity_limit=100.0,
+                joint_effort_limit={
                     "j2n7s_joint_[1-2]": 8000.0,
                     "j2n7s_joint_[3-4]": 4000.0,
                     "j2n7s_joint_[5-7]": 2000.0,
@@ -247,11 +247,11 @@ class KinovaGen3n7(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=["joint_[1-7]"],
-                effort_limit_sim={
+                joint_effort_limit={
                     "joint_[1-4]": 2340.0,
                     "joint_[5-7]": 540.0,
                 },
-                velocity_limit_sim=10.0,
+                joint_velocity_limit=10.0,
                 stiffness=500.0,
                 damping=200.0,
             ),

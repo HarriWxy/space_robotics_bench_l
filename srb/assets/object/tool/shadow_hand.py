@@ -50,7 +50,7 @@ class ShadowHand(ActiveTool):
                     "robot0_(LF|TH)J4",
                     "robot0_THJ0",
                 ],
-                effort_limit_sim={
+                joint_effort_limit={
                     "robot0_WRJ1": 4.785,
                     "robot0_WRJ0": 2.175,
                     "robot0_(FF|MF|RF|LF)J1": 0.7245,

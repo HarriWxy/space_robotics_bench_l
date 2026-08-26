@@ -11,6 +11,7 @@ from srb.utils.cfg import configclass
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
+
     from srb.core.asset import Articulation
 
 
@@ -78,7 +79,10 @@ class ScalarJointPositionAction(ActionTerm):
         )
 
     def apply_actions(self):
-        self._asset.set_joint_position_target(self._processed_actions, joint_ids=self._joint_ids)
+        self._asset.actuators.target_command.set_position_index(
+            value=self._processed_actions,
+            joint_ids=self._joint_ids,
+        )
 
 
 @configclass

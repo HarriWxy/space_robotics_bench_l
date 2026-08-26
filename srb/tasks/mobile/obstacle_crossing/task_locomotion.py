@@ -7,18 +7,20 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import AssetVariant, Humanoid, LeggedRobot, RigidObjectCfg
 from srb.core.manager import EventTermCfg, SceneEntityCfg
-from srb.core.mdp import push_by_setting_velocity  # noqa: F401
-from srb.core.mdp import reset_joints_by_scale
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_joints_by_scale,
+)
 from srb.core.sensor import ContactSensor, ContactSensorCfg
-from srb.core.sim import UsdFileCfg, CollisionPropertiesCfg, RigidBodyPropertiesCfg
+from srb.core.sim import CollisionPropertiesCfg, RigidBodyPropertiesCfg, UsdFileCfg
 from srb.utils.cfg import configclass
-from srb.utils.nucleus import ISAACLAB_NUCLEUS_DIR
 from srb.utils.math import (
     matrix_from_quat,
     rotmat_to_rot6d,
     scale_transform,
     subtract_frame_transforms,
 )
+from srb.utils.nucleus import ISAACLAB_NUCLEUS_DIR
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
 
@@ -108,7 +110,7 @@ class ObstacleCrossingTask(Task):
         ## Visualize target
         self._target_marker.visualize(self._goal[:, :3], self._goal[:, 3:])
 
-        _robot_pose = self._robot.data.root_link_pose_w
+        _robot_pose = self._robot.data.root_link_pose_w.torch
         
         # Compute reward and termination logic here (simplified for template)
         return _compute_step_return(
@@ -122,13 +124,13 @@ class ObstacleCrossingTask(Task):
             ## States
             tf_pos_robot=_robot_pose[:, 0:3],
             tf_quat_robot=_robot_pose[:, 3:7],
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
-            projected_gravity_robot=self._robot.data.projected_gravity_b,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
+            projected_gravity_robot=self._robot.data.projected_gravity_b.torch,
             tf_pos_target=self._goal[:, 0:3],
             tf_quat_target=self._goal[:, 3:7],
-            joint_pos_robot=self._robot.data.joint_pos,
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
+            joint_pos_robot=self._robot.data.joint_pos.torch,
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
         )
 

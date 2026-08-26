@@ -59,8 +59,8 @@ class Canadarm3(SerialManipulator):
         actuators={
             "joints": ImplicitActuatorCfg(
                 joint_names_expr=["canadarm3_large_joint_[1-7]"],
-                effort_limit_sim=2500.0,
-                velocity_limit_sim=5.0,
+                joint_effort_limit=2500.0,
+                joint_velocity_limit=5.0,
                 stiffness=40000.0,
                 damping=25000.0,
             ),

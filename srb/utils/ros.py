@@ -26,9 +26,9 @@ def enable_ros2_bridge(
         environ["RMW_IMPLEMENTATION"] = rmw_implementation
 
     ## Enable extension
-    from isaacsim.core.utils.extensions import enable_extension
+    from isaaclab.sim import enable_extension
 
-    assert enable_extension("isaacsim.ros2.bridge")
+    enable_extension("isaacsim.ros2.bridge")
 
     ## Check if ROS 2 is now available
     if not find_spec("rclpy"):

@@ -31,7 +31,7 @@ def get_isaacsim_python() -> str:
 
 
 def is_isaacsim_initialized() -> bool:
-    return find_spec("isaacsim.core.version") is not None
+    return find_spec("isaacsim") is not None
 
 
 def hide_isaacsim_ui():

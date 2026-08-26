@@ -58,12 +58,13 @@ class MulticopterBodyAccelerationAction(ActionTerm):
         self._processed_actions = self.raw_actions * self.cfg.scale
 
     def apply_actions(self):
-        self._asset.set_joint_velocity_target(
-            self._nominal_rpm, joint_ids=self._rotor_indices
+        self._asset.actuators.target_command.set_velocity_index(
+            value=self._nominal_rpm,
+            joint_ids=self._rotor_indices,
         )
 
-        current_velocity = self._asset._data.body_vel_w[:, self._body_index].squeeze(1)
-        current_yaw = euler_xyz_from_quat(self._asset._data.root_quat_w)[2]
+        current_velocity = self._asset.data.body_vel_w.torch[:, self._body_index].squeeze(1)
+        current_yaw = euler_xyz_from_quat(self._asset.data.root_quat_w.torch)[2]
 
         applied_velocity_lin = (
             self.cfg.controller_damping * current_velocity[:, :3]
@@ -98,7 +99,7 @@ class MulticopterBodyAccelerationAction(ActionTerm):
         self._asset.write_root_pose_to_sim(
             torch.cat(
                 (
-                    self._asset._data.root_pos_w,
+                    self._asset.data.root_pos_w.torch,
                     quat_from_euler_xyz(target_roll, target_pitch, current_yaw),
                 ),
                 dim=1,

@@ -55,12 +55,12 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
         return jacobian
 
     def _compute_ee_pose(self):
-        self._ee_pose_w[:, 0:3] = self._asset.data.body_pos_w[:, self._ee_body_idx]
-        self._ee_pose_w[:, 3:7] = self._asset.data.body_quat_w[:, self._ee_body_idx]
+        self._ee_pose_w[:, 0:3] = self._asset.data.body_pos_w.torch[:, self._ee_body_idx]
+        self._ee_pose_w[:, 3:7] = self._asset.data.body_quat_w.torch[:, self._ee_body_idx]
 
         if self._base_idx is not None:
             base_pos_w = self._asset.data.body_pos_w.torch[:, self._base_idx]
-            base_quat_w = self._asset.data.body_quat_w[:, self._base_idx]
+            base_quat_w = self._asset.data.body_quat_w.torch[:, self._base_idx]
         else:
             base_pos_w = self._asset.data.root_pos_w.torch
             base_quat_w = self._asset.data.root_quat_w.torch
@@ -87,7 +87,7 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
             self._ee_pose_b[:] = self._ee_pose_b_no_offset
 
     def _compute_ee_velocity(self):
-        self._ee_vel_w[:] = self._asset.data.body_vel_w[:, self._ee_body_idx, :]
+        self._ee_vel_w[:] = self._asset.data.body_vel_w.torch[:, self._ee_body_idx, :]
 
         if self._base_idx is not None:
             base_vel_w = self._asset.data.body_vel_w.torch[:, self._base_idx]
@@ -96,10 +96,10 @@ class OperationalSpaceControllerAction(__OperationalSpaceControllerAction):
         relative_vel_w = self._ee_vel_w - base_vel_w
 
         self._ee_vel_b[:, 0:3] = math_utils.quat_apply_inverse(
-            self._asset.data.root_quat_w, relative_vel_w[:, 0:3]
+            self._asset.data.root_quat_w.torch, relative_vel_w[:, 0:3]
         )
         self._ee_vel_b[:, 3:6] = math_utils.quat_apply_inverse(
-            self._asset.data.root_quat_w, relative_vel_w[:, 3:6]
+            self._asset.data.root_quat_w.torch, relative_vel_w[:, 3:6]
         )
 
         # Account for the offset

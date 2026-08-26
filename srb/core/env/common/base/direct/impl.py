@@ -1,5 +1,5 @@
 from functools import cached_property
-from typing import Dict, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Sequence, Tuple
 
 import gymnasium
 import numpy
@@ -9,12 +9,14 @@ from isaaclab.envs import DirectRLEnv as __DirectRLEnv
 from srb._typing import StepReturn
 from srb.core.asset import Articulation, AssetBase, RigidObject
 from srb.core.manager import ActionManager
-from srb.core.sim.robot_setup import AssembledBodies, RobotAssembler
 from srb.utils import logging
 from srb.utils.math import combine_frame_transforms, subtract_frame_transforms
 from srb.utils.str import resolve_env_prim_path
 
 from .cfg import DirectEnvCfg
+
+if TYPE_CHECKING:
+    from srb.core.sim.robot_setup import AssembledBodies
 
 
 class __PostInitCaller(type):
@@ -521,7 +523,9 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
         super()._setup_scene()
 
     def _setup_joint_assemblies(self):
-        self.joint_assemblies: Dict[str, Sequence[AssembledBodies]] = {}
+        from srb.core.sim.robot_setup import RobotAssembler
+
+        self.joint_assemblies: Dict[str, Sequence["AssembledBodies"]] = {}
         for key, assembly_cfg in self.cfg.joint_assemblies.items():
             self.joint_assemblies[key] = tuple(
                 RobotAssembler().assemble_rigid_bodies(
@@ -548,9 +552,9 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
             base_asset: RigidObject | Articulation = self.scene[
                 assembly_cfg.base_path.rsplit("/", 1)[-1]
             ]
-            attach_root_state = attach_asset.data.root_state_w[env_ids]
+            attach_root_state = attach_asset.data.root_state_w.torch[env_ids]
             attach_body_state = (
-                attach_asset.data.body_state_w[
+                attach_asset.data.body_state_w.torch[
                     env_ids,
                     attach_asset.find_bodies(
                         assembly_cfg.attach_mount_frame.removeprefix("/")
@@ -560,14 +564,14 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 else attach_root_state
             )
             base_body_state = (
-                base_asset.data.body_state_w[
+                base_asset.data.body_state_w.torch[
                     env_ids,
                     base_asset.find_bodies(
                         assembly_cfg.base_mount_frame.removeprefix("/")
                     )[0][0],
                 ]
                 if assembly_cfg.base_mount_frame
-                else base_asset.data.root_state_w[env_ids]
+                else base_asset.data.root_state_w.torch[env_ids]
             )
 
             pose = torch.cat(

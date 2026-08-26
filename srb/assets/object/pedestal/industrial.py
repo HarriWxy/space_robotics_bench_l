@@ -10,8 +10,8 @@ def spawn_pedestal_with_collision(
     orientation=None,
     **kwargs,
 ):
-    from isaaclab.sim.schemas import modify_collision_properties
     from isaaclab.sim.utils.stage import get_current_stage
+    from isaaclab_physx.sim.schemas import modify_collision_properties
     from pxr import Usd, UsdGeom, UsdPhysics
     from simforge.integrations.isaaclab.spawner.from_files.impl import spawn_from_usd
 

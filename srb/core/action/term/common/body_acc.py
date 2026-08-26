@@ -33,10 +33,10 @@ class BodyAccelerationAction(ActionTerm):
 
     def apply_actions(self):
         applied_velocities = (
-            self._asset._data.body_vel_w[:, 0].squeeze(1) + self.processed_actions
+            self._asset.data.body_vel_w.torch[:, 0] + self.processed_actions
         )
         if self.cfg.relative:
-            applied_velocities += self._asset._data.body_acc_w[:, 0].squeeze(1)
+            applied_velocities += self._asset.data.body_acc_w.torch[:, 0]
 
         self._asset.write_root_velocity_to_sim(applied_velocities)
 

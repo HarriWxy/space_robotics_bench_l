@@ -1,8 +1,8 @@
 from typing import TYPE_CHECKING
 
-import isaacsim.core.utils.prims as prim_utils
 import isaaclab.sim as sim_utils
 from isaaclab.sim import bind_physics_material, bind_visual_material, clone
+from isaaclab.sim.utils import prims as prim_utils
 from pxr import Usd
 
 from srb.core.sim import schemas

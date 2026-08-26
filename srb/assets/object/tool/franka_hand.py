@@ -42,8 +42,8 @@ class FrankaHand(ActiveTool):
         actuators={
             "panda_hand": ImplicitActuatorCfg(
                 joint_names_expr=["panda_finger_joint.*"],
-                effort_limit_sim=200.0,
-                velocity_limit_sim=0.2,
+                joint_effort_limit=200.0,
+                joint_velocity_limit=0.2,
                 stiffness=2000.0,
                 damping=250.0,
             ),

@@ -6,8 +6,8 @@ import torch
 from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import (
-    Articulation,
     AssetVariant,
+    BaseArticulation,
     MobileRobot,
     Object,
     Pedestal,
@@ -24,7 +24,7 @@ from srb.core.env import (
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers, VisualizationMarkersCfg
 from srb.core.mdp import reset_root_state_uniform
-from srb.core.sensor import ContactSensor, ContactSensorCfg
+from srb.core.sensor import ContactSensorCfg
 from srb.core.sim import PreviewSurfaceCfg, SphereCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import (
@@ -88,7 +88,7 @@ class TaskCfg(ManipulationEnvCfg):
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.5, 0.0, 0.75)
-    tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tf_quat_target: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     target_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/target",
         markers={
@@ -223,8 +223,8 @@ class Task(ManipulationEnv):
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
         env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
-        root_pose = self._obj.data.root_pos_w[env_ids_tensor].clone()
-        root_quat = self._obj.data.root_quat_w[env_ids_tensor].clone()
+        root_pose = self._obj.data.root_pos_w.torch[env_ids_tensor].clone()
+        root_quat = self._obj.data.root_quat_w.torch[env_ids_tensor].clone()
         baseline_pose = root_pose.clone()
         terrain_prim_path = self._get_terrain_prim_path()
 
@@ -239,7 +239,7 @@ class Task(ManipulationEnv):
             root_pose[:, 2] = baseline_pose[:, 2]
 
         if self.cfg.stage > 1 and len(env_ids_tensor) > 0: # 仅在第二阶段及以上进行预抓取位置的随机化
-            # tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[env_ids_tensor, 0, :]
+            # tf_pos_end_effector = self._tf_end_effector.data.target_pos_w.torch[env_ids_tensor, 0, :]
             curriculum_mix = torch.rand(len(env_ids_tensor), device=self.device) # 为每个环境生成一个随机数，用于决定是进入预抓取位置、运输位置，还是保持初始位置
             # pregrasp_mask = curriculum_mix < 0.80 
             # transport_mask = torch.zeros_like(pregrasp_mask) # 第二阶段不进行运输位置的随机化
@@ -292,9 +292,9 @@ class Task(ManipulationEnv):
             #         transport_pose[:, 2] = tf_pos_end_effector[transport_mask, 2] - 0.04
                 # root_pose[transport_mask] = transport_pose
 
-            if isinstance(self._end_effector, Articulation):
-                end_effector_joint_pos = self._end_effector.data.default_joint_pos[env_ids_tensor].clone()
-                end_effector_joint_vel = self._end_effector.data.default_joint_vel[env_ids_tensor].clone()
+            if isinstance(self._end_effector, BaseArticulation):
+                end_effector_joint_pos = self._end_effector.data.default_joint_pos.torch[env_ids_tensor].clone()
+                end_effector_joint_vel = self._end_effector.data.default_joint_vel.torch[env_ids_tensor].clone()
                 if pregrasp_mask.any():
                     end_effector_joint_pos[pregrasp_mask] = -0.004
                 if transport_mask.any():
@@ -314,9 +314,9 @@ class Task(ManipulationEnv):
             env_ids=env_ids_tensor,
         )
         self._tf_pos_obj_initial[env_ids_tensor] = baseline_pose
-        self._robot.data.joint_acc[env_ids] = 0.0
-        self._robot.data.applied_torque[env_ids] = 0.0
-        self._robot.data.joint_vel[env_ids] = 0.0
+        self._robot.data.joint_acc.torch[env_ids] = 0.0
+        self._robot.actuators.applied_effort.torch[env_ids] = 0.0
+        self._robot.data.joint_vel.torch[env_ids] = 0.0
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         processed_actions = actions
@@ -326,8 +326,8 @@ class Task(ManipulationEnv):
             if self.cfg.stage <= 1:
                 processed_actions[:, 6:] = torch.ones_like(gripper_actions)
             else:
-                tf_pos_end_effector = self._tf_end_effector.data.target_pos_w[:, 0, :]
-                tf_pos_obj = self._obj.data.root_com_pos_w
+                tf_pos_end_effector = self._tf_end_effector.data.target_pos_w.torch[:, 0, :]
+                tf_pos_obj = self._obj.data.root_com_pos_w.torch
                 distance_xy_to_obj = torch.norm(
                     tf_pos_obj[:, :2] - tf_pos_end_effector[:, :2], dim=1
                 )
@@ -368,11 +368,11 @@ class Task(ManipulationEnv):
                 else None
             ),
             joint_pos_end_effector=self._end_effector.data.joint_pos.torch
-            if isinstance(self._end_effector, Articulation)
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
                 self._end_effector.data.soft_joint_pos_limits.torch
-                if isinstance(self._end_effector, Articulation)
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
                     torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
@@ -380,10 +380,10 @@ class Task(ManipulationEnv):
             ),
             joint_vel_robot=self._robot.data.joint_vel.torch,
             joint_vel_end_effector=self._end_effector.data.joint_vel.torch
-            if isinstance(self._end_effector, Articulation)
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_acc_robot=self._robot.data.joint_acc.torch,
-            joint_applied_torque_robot=self._robot.data.applied_torque.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Kinematics
             fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
             fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
@@ -410,15 +410,15 @@ class Task(ManipulationEnv):
             # Contacts
             contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
             contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            if self._contacts_end_effector is not None
             else None,
             contact_forces_end_effector_collision=(
                 self._contacts_end_effector_collision.data.net_forces_w.torch
-                if isinstance(self._contacts_end_effector_collision, ContactSensor)
+                if self._contacts_end_effector_collision is not None
                 else None
             ),
             contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            if self._contacts_end_effector is not None
             else None,
         )
 

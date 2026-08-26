@@ -88,8 +88,8 @@ class ElectricScrewdriverM3(ActiveTool):
         actuators={
             "driver": ImplicitActuatorCfg(
                 joint_names_expr=["driver_joint", "counterweight_joint"],
-                velocity_limit_sim=4.0 * pi,
-                effort_limit_sim=100.0,
+                joint_velocity_limit=4.0 * pi,
+                joint_effort_limit=100.0,
                 stiffness=0.0,
                 damping=5000.0,
             ),
@@ -137,8 +137,8 @@ class ElectricScrewdriverM5(ActiveTool):
         actuators={
             "driver": ImplicitActuatorCfg(
                 joint_names_expr=["driver_joint", "counterweight_joint"],
-                velocity_limit_sim=4.0 * pi,
-                effort_limit_sim=100.0,
+                joint_velocity_limit=4.0 * pi,
+                joint_effort_limit=100.0,
                 stiffness=0.0,
                 damping=5000.0,
             ),

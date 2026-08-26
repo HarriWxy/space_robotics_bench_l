@@ -1,14 +1,14 @@
+from srb.core.action import JointPositionToLimitsActionCfg
 from srb.core.action.action_group import ActionGroup
 from srb.core.action.group.common import JointPositionBoundedActionGroup
-from srb.core.action import JointPositionToLimitsActionCfg
 from srb.core.actuator import ImplicitActuatorCfg
 from srb.core.asset import ActiveTool, ArticulationCfg, Frame, Transform
 from srb.core.sim import (
     ArticulationRootPropertiesCfg,
     CollisionPropertiesCfg,
+    MeshCollisionPropertiesCfg,
     RigidBodyPropertiesCfg,
     UsdFileCfg,
-    MeshCollisionPropertiesCfg,
 )
 from srb.utils.math import rpy_to_quat
 from srb.utils.path import SRB_ASSETS_DIR_SRB_ROBOT
@@ -46,8 +46,8 @@ class RobotiqHandE(ActiveTool):
         actuators={
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["Slider_[1-2]"],
-                velocity_limit_sim=4.0,
-                effort_limit_sim=20.0,
+                joint_velocity_limit=4.0,
+                joint_effort_limit=20.0,
                 stiffness=400.0,
                 damping=50.0,
             ),

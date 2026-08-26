@@ -84,7 +84,7 @@ class ThrustAction(ActionTerm):
         self._remaining_fuel = cfg.fuel_capacity * torch.ones(
             env.num_envs, device=env.device
         )
-        self._dry_masses = self._asset.root_physx_view.get_masses().clone()
+        self._dry_masses = self._asset.data.body_mass.torch.clone()
 
         ## Set up visualization markers
         if self.cfg.debug_vis:
@@ -165,18 +165,17 @@ class ThrustAction(ActionTerm):
         thruster_offsets = self._thruster_offset.unsqueeze(0).expand(
             self.num_envs, -1, -1
         )
-        com_positions = self._asset.root_physx_view.get_coms()[:, :3].unsqueeze(1)
+        com_positions = self._asset.data.body_com_pos_b.torch
         thruster_offsets_com = thruster_offsets - com_positions
 
         ## Calculate torques resulting from thruster forces
         thruster_torques = torch.cross(thruster_offsets_com, thruster_forces, dim=2)
 
         ## Apply forces and torques at center of mass in the local frame
-        self._asset.root_physx_view.apply_forces_and_torques_at_position(
-            force_data=thruster_forces.sum(dim=1),
-            torque_data=thruster_torques.sum(dim=1),
-            position_data=com_positions,
-            indices=self._asset._ALL_INDICES,
+        self._asset.permanent_wrench_composer.set_forces_and_torques_index(
+            forces=thruster_forces.sum(dim=1, keepdim=True),
+            torques=thruster_torques.sum(dim=1, keepdim=True),
+            body_ids=[0],
             is_global=False,
         )
 
@@ -188,11 +187,11 @@ class ThrustAction(ActionTerm):
         )
         self._remaining_fuel.clamp_(min=0.0)
         masses = self._dry_masses + self._remaining_fuel.unsqueeze(-1)
-        mass_decrease_ratio = masses / self._asset.root_physx_view.get_masses()
-        self._asset.root_physx_view.set_masses(masses, indices=self._asset._ALL_INDICES)
-        self._asset.root_physx_view.set_inertias(
-            mass_decrease_ratio * self._asset.root_physx_view.get_inertias(),
-            indices=self._asset._ALL_INDICES,
+        mass_decrease_ratio = masses / self._asset.data.body_mass.torch
+        self._asset.set_masses_index(masses=masses)
+        self._asset.set_inertias_index(
+            inertias=mass_decrease_ratio.unsqueeze(-1)
+            * self._asset.data.body_inertia.torch,
         )
 
         ## Update visualization markers
@@ -231,8 +230,8 @@ class ThrustAction(ActionTerm):
         thruster_directions: torch.Tensor,
         thrust_magnitudes: torch.Tensor,
     ):
-        asset_pos = self._asset.data.root_pos_w
-        asset_quat = self._asset.data.root_quat_w
+        asset_pos = self._asset.data.root_pos_w.torch
+        asset_quat = self._asset.data.root_quat_w.torch
 
         for i in range(self._num_thrusters):
             # Transform thruster position to world frame

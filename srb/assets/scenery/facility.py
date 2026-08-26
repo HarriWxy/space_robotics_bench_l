@@ -8,7 +8,7 @@ from simforge import BakeType
 from srb.assets.object.rock import LunalabBoulder
 from srb.assets.scenery.planetary_surface import MoonSurface
 from srb.core.asset import AssetBaseCfg, Object, Subterrane, Terrain
-from srb.core.env import ViewerCfg
+from srb.core.env import KitVisualizerCfg
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import reset_xforms_uniform_poisson_disk_2d
 from srb.core.sim import CollisionPropertiesCfg, GridParticlesSpawnerCfg, UsdFileCfg
@@ -59,8 +59,8 @@ class Lunalab(Subterrane):
         scene.env_spacing = 0.0 if env_cfg.stack else 12.5
 
         ## Viewer
-        env_cfg.viewer = (  # type: ignore
-            ViewerCfg(eye=(-4.0, -5.0, 1.5), lookat=(0.0, -1.0, 0.0), origin_type="env")
+        env_cfg.visualizer = (  # type: ignore
+            KitVisualizerCfg(eye=(-4.0, -5.0, 1.5), lookat=(0.0, -1.0, 0.0), origin_type="env")
         )
 
         ## Light

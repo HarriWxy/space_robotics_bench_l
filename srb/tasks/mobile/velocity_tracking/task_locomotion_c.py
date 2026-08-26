@@ -403,7 +403,7 @@ class LocomotionTask(Task):
             neginf=0.0,
         )
         default_quat = torch.zeros_like(tf_quat_robot)
-        default_quat[:, 0] = 1.0
+        default_quat[:, 3] = 1.0
         tf_quat_robot = torch.where(
             torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1.0e-6,
             default_quat,
@@ -452,7 +452,7 @@ class LocomotionTask(Task):
             neginf=0.0,
         )
         joint_applied_torque_robot = torch.nan_to_num(
-            self._robot.data.applied_torque.torch,
+            self._robot.actuators.applied_effort.torch,
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
@@ -691,7 +691,7 @@ def _compute_step_return(
     ## States ##
     ############
     default_quat = torch.zeros_like(tf_quat_robot)
-    default_quat[:, 0] = 1.0
+    default_quat[:, 3] = 1.0
     tf_quat_robot = torch.where(
         torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1.0e-6,
         default_quat,

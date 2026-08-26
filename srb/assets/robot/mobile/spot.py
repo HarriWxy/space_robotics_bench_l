@@ -53,7 +53,7 @@ class Spot(LeggedRobot):
         actuators={
             "spot_hip": DelayedPDActuatorCfg(
                 joint_names_expr=[".*_h[xy]"],
-                effort_limit_sim=45.0,
+                joint_effort_limit=45.0,
                 stiffness=60.0,
                 damping=1.5,
                 min_delay=0,
@@ -164,7 +164,7 @@ class Spot(LeggedRobot):
                     [-0.272558, -22.528547, 33.792821],
                     [-0.247100, -20.401667, 30.602500],
                 ],
-                effort_limit_sim=None,
+                joint_effort_limit=None,
                 stiffness=60.0,
                 damping=1.5,
                 min_delay=0,

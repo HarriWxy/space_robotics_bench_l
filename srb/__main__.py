@@ -135,12 +135,12 @@ def run_agent_with_env(
 
     from omni.physx import get_physx_interface
 
+    from srb.core.sim import RenderCfg, apply_isaac_rtx_global_settings
     from srb.interfaces.teleop import EventOmniKeyboardTeleopInterface
     from srb.utils import logging
-    from srb.utils.cfg import DEFAULT_DATETIME_FORMAT, last_logdir, new_logdir
+    from srb.utils.cfg import last_logdir, new_logdir
     from srb.utils.hydra.sim import hydra_task_config
     from srb.utils.isaacsim import hide_isaacsim_ui
-    from srb.core.sim import RenderCfg, apply_isaac_rtx_global_settings
 
     apply_isaac_rtx_global_settings(RenderCfg(
         enable_translucency=True,
@@ -225,25 +225,27 @@ def run_agent_with_env(
     def hydra_main(env_cfg: Dict[str, Any], agent_cfg: Dict[str, Any] | None = None):
         import gymnasium
 
-        # Create the environment and initialize it
-        env = gymnasium.make(
-            id=env_id, cfg=env_cfg, render_mode="rgb_array" if video_enable else None
-        )
-        env.reset()
-
-        # Add wrapper for video recording
+        # Configure Isaac Lab's recorder before the environment is created.  Gym
+        # video wrappers and render_mode="rgb_array" are deprecated in Isaac Lab
+        # 3.x, where the environment owns its recording lifecycle.
         if video_enable:
-            from datetime import datetime
+            from isaaclab.envs import VideoRecorderCfg
 
-            env = gymnasium.wrappers.RecordVideo(
-                env,
-                video_folder=logdir.joinpath("videos")
-                .joinpath(datetime.now().strftime(DEFAULT_DATETIME_FORMAT))
-                .as_posix(),
-                name_prefix=env_id.rsplit("/", 1)[-1],
-                disable_logger=True,
-                episode_trigger=lambda _: True,
-            )
+            video_recorders = getattr(env_cfg, "video_recorders", [])
+            if not video_recorders:
+                video_recorders = [
+                    VideoRecorderCfg(source="visualizer:kit", video_interval=2000)
+                ]
+                env_cfg.video_recorders = video_recorders
+            for recorder_cfg in video_recorders:
+                if recorder_cfg.output_dir is None:
+                    recorder_cfg.output_dir = logdir.joinpath("videos").as_posix()
+                if recorder_cfg.output_filename_prefix == "clip":
+                    recorder_cfg.output_filename_prefix = env_id.rsplit("/", 1)[-1]
+
+        # Create the environment and initialize it.
+        env = gymnasium.make(id=env_id, cfg=env_cfg)
+        env.reset()
 
         # Add wrapper for performance tests
         if perf_enable:
@@ -550,8 +552,7 @@ def _teleop_agent_direct(
     # Invert only for manipulation environments
     if invert_controls:
         invert_controls = isinstance(env.unwrapped, ManipulationEnv)
-    if teleop_interface.ft_feedback_interfaces:
-        ft_feedback_use_contacts = ft_feedback_use_contacts
+    warned_about_deprecated_ft_source = False
 
     ## Run the environment
     with torch.inference_mode():
@@ -585,29 +586,16 @@ def _teleop_agent_direct(
             # Provide force feedback for teleop devices
             if teleop_interface.ft_feedback_interfaces:
                 if isinstance(env.unwrapped, ManipulationEnv):
-                    if (
-                        not ft_feedback_use_contacts
-                        and env.unwrapped._end_effector is not None
-                    ):
-                        end_effector = env.unwrapped._end_effector
-                        try:
-                            incoming_ft = (
-                                end_effector.root_physx_view.get_link_incoming_joint_force()  # type: ignore
-                            )[0].mean(dim=0)
-                            ft_feedback: torch.Tensor = (
-                                torch.tensor([0.33, 0.33, 0.33, 0.0, 0.0, 0.0])
-                                * incoming_ft.cpu()
-                            )
-                            teleop_interface.set_ft_feedback(ft_feedback)
-                        except Exception:
-                            ft_feedback_use_contacts = True
-                    if (
-                        ft_feedback_use_contacts
-                        and env.unwrapped._contacts_end_effector is not None
-                    ):
+                    if not ft_feedback_use_contacts and not warned_about_deprecated_ft_source:
+                        logging.warning(
+                            "Joint incoming-force feedback is unavailable in Isaac Lab 3.x; "
+                            "using the end-effector contact sensor instead."
+                        )
+                        warned_about_deprecated_ft_source = True
+                    if env.unwrapped._contacts_end_effector is not None:
                         contacts_end_effector = env.unwrapped._contacts_end_effector
                         contact_forces = (
-                            contacts_end_effector.data.net_forces_w  # type: ignore
+                            contacts_end_effector.data.net_forces_w.torch  # type: ignore
                         )[0].mean(dim=0)
                         contact_ft = torch.cat(
                             [
@@ -1177,7 +1165,7 @@ def generate_real_agent(
 
         # Create the environment and initialize it
         env_spec = gymnasium.spec(env_id)
-        env = gymnasium.make(id=env_id, cfg=env_cfg, render_mode=None)
+        env = gymnasium.make(id=env_id, cfg=env_cfg)
         env.reset()
 
         # Generate RealEnv classes

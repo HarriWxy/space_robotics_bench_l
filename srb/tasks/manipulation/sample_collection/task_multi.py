@@ -5,7 +5,7 @@ import torch
 
 from srb._typing import StepReturn
 from srb.core.asset import (
-    Articulation,
+    BaseArticulation,
     RigidObjectCfg,
     RigidObjectCollection,
     RigidObjectCollectionCfg,
@@ -14,7 +14,7 @@ from srb.core.env import ManipulationEnv
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers
 from srb.core.mdp import reset_collection_root_state_uniform_poisson_disk_2d
-from srb.core.sensor import ContactSensor, ContactSensorCfg
+from srb.core.sensor import ContactSensorCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import (
     matrix_from_quat,
@@ -24,6 +24,7 @@ from srb.utils.math import (
 )
 
 from .asset import select_sample
+
 # from .terrain import terrain_surface_heights
 from .task import EventCfg, SceneCfg, TaskCfg
 
@@ -147,7 +148,7 @@ class MultiTask(ManipulationEnv):
         super()._reset_idx(env_ids)
         # env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         # if self.scene.scenery is not None:
-        #     object_pose = self._objs.data.object_link_pose_w[env_ids_tensor].clone()
+        #     object_pose = self._objs.data.body_link_pose_w.torch[env_ids_tensor].clone()
         #     flat_object_pose = object_pose.reshape(-1, 7)
         #     flat_env_ids = env_ids_tensor.repeat_interleave(self.cfg.num_samples)
         #     terrain_heights = terrain_surface_heights(
@@ -157,11 +158,11 @@ class MultiTask(ManipulationEnv):
         #         flat_env_ids,
         #     )
         #     flat_object_pose[:, 2] = terrain_heights + 0.08
-        #     self._objs.write_object_pose_to_sim(
+        #     self._objs.write_body_pose_to_sim(
         #         flat_object_pose.reshape(len(env_ids_tensor), self.cfg.num_samples, 7),
         #         env_ids=env_ids_tensor,
         #     )
-        self._tf_pos_objs_initial[env_ids] = self._objs.data.object_com_pos_w[env_ids]
+        self._tf_pos_objs_initial[env_ids] = self._objs.data.body_com_pos_w.torch[env_ids]
 
     def extract_step_return(self) -> StepReturn:
         return _compute_step_return(
@@ -174,43 +175,43 @@ class MultiTask(ManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
             tf_pos_objs_initial=self._tf_pos_objs_initial,
-            tf_pos_objs=self._objs.data.object_com_pos_w,
-            tf_quat_objs=self._objs.data.object_com_quat_w,
+            tf_pos_objs=self._objs.data.body_com_pos_w.torch,
+            tf_quat_objs=self._objs.data.body_com_quat_w.torch,
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
+            if self._contacts_end_effector is not None
             else None,
         )
 

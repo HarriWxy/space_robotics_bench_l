@@ -102,15 +102,15 @@ class DifferentialInverseKinematicsAction(__DifferentialInverseKinematicsAction)
         return jacobian
 
     def _compute_frame_pose(self) -> tuple[torch.Tensor, torch.Tensor]:
-        ee_pos_w = self._asset.data.body_pos_w[:, self._body_idx]
-        ee_quat_w = self._asset.data.body_quat_w[:, self._body_idx]
+        ee_pos_w = self._asset.data.body_pos_w.torch[:, self._body_idx]
+        ee_quat_w = self._asset.data.body_quat_w.torch[:, self._body_idx]
 
         if self._base_idx is not None:
-            base_pos_w = self._asset.data.body_pos_w[:, self._base_idx]
-            base_quat_w = self._asset.data.body_quat_w[:, self._base_idx]
+            base_pos_w = self._asset.data.body_pos_w.torch[:, self._base_idx]
+            base_quat_w = self._asset.data.body_quat_w.torch[:, self._base_idx]
         else:
-            base_pos_w = self._asset.data.root_pos_w
-            base_quat_w = self._asset.data.root_quat_w
+            base_pos_w = self._asset.data.root_pos_w.torch
+            base_quat_w = self._asset.data.root_quat_w.torch
 
         ee_pose_b, ee_quat_b = math_utils.subtract_frame_transforms(
             base_pos_w, base_quat_w, ee_pos_w, ee_quat_w
@@ -189,8 +189,9 @@ class DifferentialInverseKinematicsAction(__DifferentialInverseKinematicsAction)
             solve_mask.unsqueeze(-1), joint_pos_candidate, safe_joint_pos
         )
         self._skip_ik_once.zero_()
-        self._asset.set_joint_position_target_index(
-            target=joint_pos_des, joint_ids=self._joint_ids
+        self._asset.actuators.target_command.set_position_index(
+            value=joint_pos_des,
+            joint_ids=self._joint_ids,
         )
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:

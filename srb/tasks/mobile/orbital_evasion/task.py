@@ -74,7 +74,7 @@ class TaskCfg(OrbitalEnvCfg):
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.0, 0.0, -50.0)
-    tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tf_quat_target: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     target_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/target",
         markers={
@@ -156,16 +156,16 @@ class Task(OrbitalEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_pos_robot=self._robot.data.root_pos_w,
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
             # Transforms (world frame)
-            tf_pos_objs=self._objs.data.object_com_pos_w,
+            tf_pos_objs=self._objs.data.body_com_pos_w.torch,
             tf_pos_target=self._tf_pos_target,
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             # Fuel
             remaining_fuel=remaining_fuel,
         )

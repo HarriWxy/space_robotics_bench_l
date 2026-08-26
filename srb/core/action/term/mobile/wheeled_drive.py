@@ -78,14 +78,16 @@ class WheeledDriveAction(ActionTerm):
                 )
 
         ## Apply drive commands
-        self._asset.set_joint_velocity_target(
-            drive_velocities, joint_ids=self._drive_joint_indices
+        self._asset.actuators.target_command.set_velocity_index(
+            value=drive_velocities,
+            joint_ids=self._drive_joint_indices,
         )
 
         ## Apply steering commands
         if steer_angles is not None:
-            self._asset.set_joint_position_target(
-                steer_angles, joint_ids=self._steering_joint_indices
+            self._asset.actuators.target_command.set_position_index(
+                value=steer_angles,
+                joint_ids=self._steering_joint_indices,
             )
 
     def reset(self, env_ids: Sequence[int] | None = None):

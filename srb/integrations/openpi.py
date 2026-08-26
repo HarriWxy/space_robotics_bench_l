@@ -131,9 +131,9 @@ def run_vla_rollout(
     try:
         update_offline_srb_cache()
 
-        from srb.utils.hydra.sim import hydra_task_config
-
         from omni.physx import get_physx_interface
+
+        from srb.utils.hydra.sim import hydra_task_config
 
         env_id = _resolve_visual_env_id(env_id)
         # overwrite_gpu_setting values: -1=Schema Based, 0=Force CPU, 1=Force GPU
@@ -153,8 +153,11 @@ def run_vla_rollout(
         )
         def hydra_main(env_cfg: Dict[str, Any], agent_cfg: Dict[str, Any] | None = None):
             import traceback as _tb
+
             import gymnasium
-            from openpi_client import websocket_client_policy as _websocket_client_policy
+            from openpi_client import (
+                websocket_client_policy as _websocket_client_policy,
+            )
 
             try:
                 env_cfg.seed = seed
@@ -162,7 +165,7 @@ def run_vla_rollout(
                 env_cfg.scene.num_envs = 1
                 env_cfg.sim.device = device
 
-                env = gymnasium.make(id=env_id, cfg=env_cfg, render_mode="rgb_array")
+                env = gymnasium.make(id=env_id, cfg=env_cfg)
                 env.reset(seed=seed)
 
                 # ── 同步重连推理循环（不使用 asyncio，避免与 Isaac Sim 事件循环冲突）─

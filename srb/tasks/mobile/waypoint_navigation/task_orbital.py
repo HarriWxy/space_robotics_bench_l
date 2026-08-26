@@ -7,11 +7,11 @@ from srb._typing import StepReturn
 from srb.core.action import ThrustAction
 from srb.core.asset import AssetVariant, ExtravehicularScenery, MobileRobot
 from srb.core.env import (
+    KitVisualizerCfg,
     OrbitalEnv,
     OrbitalEnvCfg,
     OrbitalEventCfg,
     OrbitalSceneCfg,
-    ViewerCfg,
 )
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers, VisualizationMarkersCfg
@@ -110,11 +110,11 @@ class TaskCfg(OrbitalEnvCfg):
     )
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(3.0, -3.0, 3.0),
         lookat=(0.0, 0.0, 0.0),
-        origin_type="asset_root",
-        asset_name="robot",
+        origin_type="asset",
+        origin_track_path="robot",
     )
 
 
@@ -137,7 +137,7 @@ class Task(OrbitalEnv):
         ## Initialize buffers
         self._goal = torch.zeros(self.num_envs, 7, device=self.device)
         self._goal[:, 0:3] = self.scene.env_origins
-        self._goal[:, 3] = 1.0
+        self._goal[:, 6] = 1.0
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
@@ -145,7 +145,7 @@ class Task(OrbitalEnv):
         ## Reset goal position
         self._goal[env_ids, 0:3] = self.scene.env_origins[env_ids]
         self._goal[env_ids, 3:7] = torch.tensor(
-            [1.0, 0.0, 0.0, 0.0], device=self.device
+            [0.0, 0.0, 0.0, 1.0], device=self.device
         )
 
         ## Setup TF listener for ROS-defined target (if applicable)
@@ -217,16 +217,16 @@ class Task(OrbitalEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_pos_robot=self._robot.data.root_pos_w,
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
             # Transforms (world frame)
             tf_pos_target=self._goal[:, 0:3],
             tf_quat_target=self._goal[:, 3:7],
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             # Fuel
             remaining_fuel=remaining_fuel,
         )

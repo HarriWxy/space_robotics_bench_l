@@ -1,11 +1,12 @@
 import logging
 from itertools import chain
-from typing import TYPE_CHECKING, Dict, List, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Sequence, Tuple, cast
 
-from isaaclab.assets import AssetBaseCfg
 import isaaclab.sim as sim_utils
 import torch
 import torch.nn.functional as F
+import warp as wp
+from isaaclab.assets import AssetBaseCfg
 from pxr import Gf
 
 import srb.core.sim.spawners.particles.utils as particle_utils
@@ -13,9 +14,9 @@ from srb.core.asset import (
     Articulation,
     AssetBase,
     DeformableObject,
+    FrameView,
     RigidObject,
     RigidObjectCollection,
-    XFormPrim,
 )
 from srb.core.manager import SceneEntityCfg
 from srb.utils.math import (
@@ -36,6 +37,36 @@ if TYPE_CHECKING:
     from srb._typing import AnyEnv
 
 
+def _frame_view_indices(
+    view: FrameView,
+    env: "AnyEnv",
+    env_ids: torch.Tensor | None,
+) -> torch.Tensor | None:
+    """Use per-environment indices only when a frame view has one prim per environment."""
+    if env_ids is None or view.count != env.scene.num_envs:
+        return None
+    return env_ids
+
+
+def _set_frame_view_world_poses(
+    view: FrameView,
+    *,
+    positions: torch.Tensor | None = None,
+    orientations: torch.Tensor | None = None,
+    env: "AnyEnv",
+    env_ids: torch.Tensor | None = None,
+) -> None:
+    """Write FrameView poses through Warp for both PhysX and Newton backends."""
+    indices = _frame_view_indices(view, env, env_ids)
+    view.set_world_poses(
+        positions=None if positions is None else wp.from_torch(positions.contiguous()),
+        orientations=None if orientations is None else wp.from_torch(orientations.contiguous()),
+        indices=None
+        if indices is None
+        else wp.from_torch(indices.to(dtype=torch.int32).contiguous()),
+    )
+
+
 def reset_scene_to_default(env: "AnyEnv", env_ids: torch.Tensor):
     reset_rigid_objects_default(env, env_ids)
     reset_articulations_default(env, env_ids)
@@ -45,7 +76,7 @@ def reset_scene_to_default(env: "AnyEnv", env_ids: torch.Tensor):
 def reset_rigid_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
     for rigid_object in env.scene.rigid_objects.values():
         # Obtain default and deal with the offset for env origins
-        default_root_state = rigid_object.data.default_root_state[env_ids].clone()
+        default_root_state = rigid_object.data.default_root_state.torch[env_ids].clone()
         default_root_state[:, 0:3] += env.scene.env_origins[env_ids]
         # Set into the physics simulation
         rigid_object.write_root_pose_to_sim(
@@ -62,9 +93,9 @@ def reset_rigid_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
 def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
     for articulation_asset in env.scene.articulations.values():
         # Obtain default and deal with the offset for env origins
-        default_root_state = articulation_asset.data.default_root_state[env_ids].clone()
+        default_root_state = articulation_asset.data.default_root_state.torch[env_ids].clone()
         # default_root_pos = articulation_asset.data.default_root_pose[env_ids].clone()
-        # default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
+        # default_joint_vel = articulation_asset.data.default_joint_vel.torch[env_ids].clone()
         
         default_root_state[:, 0:3] += env.scene.env_origins[env_ids] ## what does this mean?  
         # Set into the physics simulation
@@ -77,8 +108,8 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
             env_ids=env_ids,  # type: ignore
         )
         # Obtain default joint positions
-        default_joint_pos = articulation_asset.data.default_joint_pos[env_ids].clone()
-        default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
+        default_joint_pos = articulation_asset.data.default_joint_pos.torch[env_ids].clone()
+        default_joint_vel = articulation_asset.data.default_joint_vel.torch[env_ids].clone()
         # Set into the physics simulation
         articulation_asset.write_joint_position_to_sim_index(
             position = default_joint_pos,
@@ -98,7 +129,7 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
 def reset_deformable_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
     for deformable_object in env.scene.deformable_objects.values():
         # Obtain default and set into the physics simulation
-        nodal_state = deformable_object.data.default_nodal_state_w[env_ids].clone()
+        nodal_state = deformable_object.data.default_nodal_state_w.torch[env_ids].clone()
         deformable_object.write_nodal_state_to_sim(nodal_state, env_ids=env_ids)  # type: ignore
 
 
@@ -474,26 +505,23 @@ def reset_xform_orientation_uniform(
     orientation_distribution_params: Dict[str, Tuple[float, float]],
     asset_cfg: SceneEntityCfg,
 ):
-    asset:AssetBaseCfg = env.scene[asset_cfg.name]
+    asset: AssetBaseCfg | FrameView = env.scene[asset_cfg.name]
     temporary_view = False
     if not hasattr(asset, "set_world_poses"):
         # AssetBaseCfg entities (for example lights) are stored in
-        # InteractiveScene.extras and do not have a runtime XFormPrim view.
+        # InteractiveScene.extras and do not have a runtime FrameView.
         prim_path = getattr(asset, "prim_path", None)
         if prim_path is None:
             raise TypeError(
                 f"Scene entity '{asset_cfg.name}' does not expose a runtime pose API "
                 "or a prim_path."
             )
-        asset = XFormPrim(
-            prim_paths_expr=prim_path,
-            name=f"{asset_cfg.name}_event_xform",
-            reset_xform_properties=False,
-        )
+        asset = FrameView(prim_path, device=env.device)
         temporary_view = True
 
     try:
-        device = getattr(asset, "_device", None) or env.device
+        view = cast(FrameView, asset)
+        device = view.device
         range_list = [
             orientation_distribution_params.get(key, (0.0, 0.0))
             for key in ["roll", "pitch", "yaw"]
@@ -503,20 +531,25 @@ def reset_xform_orientation_uniform(
             ranges[:, 0], ranges[:, 1], (1, 3), device=device
         )
 
-        orientations = quat_from_euler_xyz(
+        orientation = quat_from_euler_xyz(
             rand_samples[:, 0], rand_samples[:, 1], rand_samples[:, 2]
         )
-
-        # IsaacLab math utilities use (x, y, z, w), while the legacy
-        # IsaacSim XFormPrim wrapper expects scalar-first (w, x, y, z).
-        asset.set_world_poses(orientations=orientations[:, [3, 0, 1, 2]].cpu())
+        indices = _frame_view_indices(view, env, env_ids)
+        count = view.count if indices is None else len(indices)
+        orientations = orientation.expand(count, -1)
+        _set_frame_view_world_poses(
+            view,
+            orientations=orientations,
+            env=env,
+            env_ids=env_ids,
+        )
     finally:
         if temporary_view:
-            asset.destroy()
+            view.close()
 
 
 def _get_usd_asset_prims(env: "AnyEnv", asset_cfg: SceneEntityCfg):
-    """Return prims for both runtime XFormPrim views and static AssetBaseCfgs."""
+    """Return prims for both runtime FrameViews and static AssetBaseCfgs."""
     asset = env.scene[asset_cfg.name]
     prims = getattr(asset, "prims", None)
     if prims is not None:
@@ -608,19 +641,19 @@ def follow_xform_orientation_linear_trajectory(
     orientation_step_params: Dict[str, float],
     asset_cfg: SceneEntityCfg,
 ):
-    asset: XFormPrim = env.scene[asset_cfg.name]
+    asset: FrameView = env.scene[asset_cfg.name]
 
     _, current_quat = asset.get_world_poses()
 
     steps = torch.tensor(
         [orientation_step_params.get(key, 0.0) for key in ["roll", "pitch", "yaw"]],
-        device=asset._device,
+        device=asset.device,
     )
     step_quat = quat_from_euler_xyz(steps[0], steps[1], steps[2]).unsqueeze(0)
 
-    orientations = quat_mul(current_quat, step_quat)  # type: ignore
+    orientations = quat_mul(current_quat.torch, step_quat)
 
-    asset.set_world_poses(orientations=orientations)
+    _set_frame_view_world_poses(asset, orientations=orientations, env=env)
 
 
 def reset_root_state_uniform_poisson_disk_2d(
@@ -637,7 +670,7 @@ def reset_root_state_uniform_poisson_disk_2d(
     ]
     # Get default root state
     root_states = torch.stack(
-        [asset.data.default_root_state[env_ids].clone() for asset in assets],
+        [asset.data.default_root_state.torch[env_ids].clone() for asset in assets],
     ).swapaxes(0, 1)
 
     # Poses
@@ -717,7 +750,7 @@ def reset_xforms_uniform_poisson_disk_2d(
     asset_cfg: Sequence[SceneEntityCfg],
 ):
     # Extract the used quantities (to enable type-hinting)
-    assets: List[XFormPrim] = [env.scene[cfg.name] for cfg in asset_cfg]
+    assets: List[FrameView] = [env.scene[cfg.name] for cfg in asset_cfg]
     asset_count = assets[0].count
 
     # Poses
@@ -763,10 +796,12 @@ def reset_xforms_uniform_poisson_disk_2d(
         positions.unbind(1),
         orientations.unbind(1),
     ):
-        asset.set_world_poses(
+        _set_frame_view_world_poses(
+            asset,
             positions=position,
             orientations=orientation,
-            indices=None if env.cfg.stack else env_ids,
+            env=env,
+            env_ids=None if env.cfg.stack else env_ids,
         )
 
 
@@ -782,7 +817,7 @@ def reset_collection_root_state_uniform_poisson_disk_2d(
     assets: RigidObjectCollection = env.scene[asset_cfg.name]
 
     # Get default root state
-    root_states = assets.data.default_object_state[env_ids]
+    root_states = assets.data.default_body_state.torch[env_ids]
 
     # Poses
     range_list = [
@@ -792,7 +827,7 @@ def reset_collection_root_state_uniform_poisson_disk_2d(
     ranges = torch.tensor(range_list, dtype=torch.float32, device=assets.device)
     samples_pos_xy = torch.tensor(
         sample_poisson_disk_2d_looped(
-            (len(env_ids), assets.num_objects),
+            (len(env_ids), assets.num_bodies),
             (
                 (range_list[0][0], range_list[1][0]),
                 (range_list[0][1], range_list[1][1]),
@@ -804,21 +839,21 @@ def reset_collection_root_state_uniform_poisson_disk_2d(
     rand_samples = sample_uniform(
         ranges[2:, 0],
         ranges[2:, 1],
-        (len(env_ids), assets.num_objects, 4),
+        (len(env_ids), assets.num_bodies, 4),
         device=assets.device,
     )
     rand_samples = torch.cat([samples_pos_xy, rand_samples], dim=-1)
 
     positions = (
         root_states[:, :, 0:3]
-        + env.scene.env_origins[env_ids].repeat(assets.num_objects, 1, 1).swapaxes(0, 1)
+        + env.scene.env_origins[env_ids].repeat(assets.num_bodies, 1, 1).swapaxes(0, 1)
         + rand_samples[:, :, 0:3]
     )
     orientations_delta = quat_from_euler_xyz(
         rand_samples[:, :, 3], rand_samples[:, :, 4], rand_samples[:, :, 5]
     )
     orientations = quat_mul(root_states[:, :, 3:7], orientations_delta)
-    assets.write_object_pose_to_sim(
+    assets.write_body_pose_to_sim(
         torch.cat([positions, orientations], dim=-1), env_ids=env_ids
     )
 
@@ -832,11 +867,11 @@ def reset_collection_root_state_uniform_poisson_disk_2d(
         rand_samples = sample_uniform(
             ranges[:, 0],
             ranges[:, 1],
-            (len(env_ids), assets.num_objects, 6),
+            (len(env_ids), assets.num_bodies, 6),
             device=assets.device,
         )
         velocities = root_states[:, :, 7:13] + rand_samples
-        assets.write_object_velocity_to_sim(velocities, env_ids=env_ids)
+        assets.write_body_com_velocity_to_sim(velocities, env_ids=env_ids)
 
 
 def reset_xforms_uniform_poisson_disk_3d(
@@ -847,7 +882,7 @@ def reset_xforms_uniform_poisson_disk_3d(
     asset_cfg: Sequence[SceneEntityCfg],
 ):
     # Extract the used quantities (to enable type-hinting)
-    assets: List[XFormPrim] = [env.scene[cfg.name] for cfg in asset_cfg]
+    assets: List[FrameView] = [env.scene[cfg.name] for cfg in asset_cfg]
     asset_count = assets[0].count
 
     # Poses
@@ -891,10 +926,12 @@ def reset_xforms_uniform_poisson_disk_3d(
     for asset, position, orientation in zip(
         assets, positions.unbind(1), orientations.unbind(1)
     ):
-        asset.set_world_poses(
+        _set_frame_view_world_poses(
+            asset,
             positions=position,
             orientations=orientation,
-            indices=None if env.cfg.stack else env_ids,
+            env=env,
+            env_ids=None if env.cfg.stack else env_ids,
         )
 
 
@@ -912,7 +949,7 @@ def reset_root_state_uniform_poisson_disk_3d(
     ]
     # Get default root state
     root_states = torch.stack(
-        [asset.data.default_root_state[env_ids].clone() for asset in assets],
+        [asset.data.default_root_state.torch[env_ids].clone() for asset in assets],
     ).swapaxes(0, 1)
 
     # Poses
@@ -996,7 +1033,7 @@ def reset_collection_root_state_uniform_poisson_disk_3d(
     assets: RigidObjectCollection = env.scene[asset_cfg.name]
 
     # Get default root state
-    root_states = assets.data.default_object_state[env_ids]
+    root_states = assets.data.default_body_state.torch[env_ids]
 
     # Poses
     range_list = [
@@ -1006,7 +1043,7 @@ def reset_collection_root_state_uniform_poisson_disk_3d(
     ranges = torch.tensor(range_list, dtype=torch.float32, device=assets.device)
     samples_pos = torch.tensor(
         sample_poisson_disk_3d_looped(
-            (len(env_ids), assets.num_objects),
+            (len(env_ids), assets.num_bodies),
             (
                 (range_list[0][0], range_list[1][0], range_list[2][0]),
                 (range_list[0][1], range_list[1][1], range_list[2][1]),
@@ -1018,21 +1055,21 @@ def reset_collection_root_state_uniform_poisson_disk_3d(
     rand_samples = sample_uniform(
         ranges[3:, 0],
         ranges[3:, 1],
-        (len(env_ids), assets.num_objects, 3),
+        (len(env_ids), assets.num_bodies, 3),
         device=assets.device,
     )
     rand_samples = torch.cat([samples_pos, rand_samples], dim=-1)
 
     positions = (
         root_states[:, :, 0:3]
-        + env.scene.env_origins[env_ids].repeat(assets.num_objects, 1, 1).swapaxes(0, 1)
+        + env.scene.env_origins[env_ids].repeat(assets.num_bodies, 1, 1).swapaxes(0, 1)
         + rand_samples[:, :, 0:3]
     )
     orientations_delta = quat_from_euler_xyz(
         rand_samples[:, :, 3], rand_samples[:, :, 4], rand_samples[:, :, 5]
     )
     orientations = quat_mul(root_states[:, :, 3:7], orientations_delta)
-    assets.write_object_pose_to_sim(
+    assets.write_body_pose_to_sim(
         torch.cat([positions, orientations], dim=-1), env_ids=env_ids
     )
 
@@ -1046,11 +1083,11 @@ def reset_collection_root_state_uniform_poisson_disk_3d(
         rand_samples = sample_uniform(
             ranges[:, 0],
             ranges[:, 1],
-            (len(env_ids), assets.num_objects, 6),
+            (len(env_ids), assets.num_bodies, 6),
             device=assets.device,
         )
         velocities = root_states[:, :, 7:13] + rand_samples
-        assets.write_object_velocity_to_sim(velocities, env_ids=env_ids)
+        assets.write_body_com_velocity_to_sim(velocities, env_ids=env_ids)
 
 
 def settle_and_reset_particles(
@@ -1077,13 +1114,13 @@ def settle_and_reset_particles(
         for asset in chain(
             env.scene.articulations.values(), env.scene.rigid_objects.values()
         ):
-            new_state = asset.data.default_root_state.clone()
+            new_state = asset.data.default_root_state.torch.clone()
             new_state[:, 2] -= 10000.0
             asset.write_root_state_to_sim(new_state)
         for collection in env.scene.rigid_object_collections.values():
-            new_state = collection.data.default_object_state.clone()
+            new_state = collection.data.default_body_state.torch.clone()
             new_state[:, :, 2] -= 10000.0
-            collection.write_object_state_to_sim(new_state)
+            collection.write_body_state_to_sim(new_state)
 
         # Let the particles settle
         logging.info("Letting particles settle, please be patient...")
@@ -1143,9 +1180,9 @@ def settle_and_reset_particles(
         for asset in chain(
             env.scene.articulations.values(), env.scene.rigid_objects.values()
         ):
-            asset.write_root_state_to_sim(asset.data.default_root_state)
+            asset.write_root_state_to_sim(asset.data.default_root_state.torch)
         for collection in env.scene.rigid_object_collections.values():
-            collection.write_object_state_to_sim(collection.data.default_object_state)
+            collection.write_body_state_to_sim(collection.data.default_body_state.torch)
 
         # Extract statistics about the initial state of the particles
         for i in range(num_particle_systems):
@@ -1189,7 +1226,7 @@ def reset_deformable_root_state_uniform(
     ``(min, max)``. If the dictionary does not contain a key, the position or velocity is set to zero for that axis.
     """
     asset: DeformableObject = env.scene[asset_cfg.name]
-    nodal_state = asset.data.default_nodal_state_w[env_ids].clone()
+    nodal_state = asset.data.default_nodal_state_w.torch[env_ids].clone()
 
     # Pose
     ranges = torch.tensor(

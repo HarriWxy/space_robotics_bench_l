@@ -44,8 +44,8 @@ class AllegroHand(ActiveTool):
         actuators={
             "fingers": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                effort_limit_sim=0.5,
-                velocity_limit_sim=100.0,
+                joint_effort_limit=0.5,
+                joint_velocity_limit=100.0,
                 stiffness=3.0,
                 damping=0.1,
                 friction=0.01,

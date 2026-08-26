@@ -37,22 +37,22 @@ class Pragyan(WheeledRobot):
         actuators={
             "drive_joints": ImplicitActuatorCfg(
                 joint_names_expr=["wheel_drive_joint_.*"],
-                velocity_limit_sim=40.0,
-                effort_limit_sim=150.0,
+                joint_velocity_limit=40.0,
+                joint_effort_limit=150.0,
                 damping=5000.0,
                 stiffness=0.0,
             ),
             "rocker_joints": ImplicitActuatorCfg(
                 joint_names_expr=["rocker_joint_.*"],
-                velocity_limit_sim=5.0,
-                effort_limit_sim=2500.0,
+                joint_velocity_limit=5.0,
+                joint_effort_limit=2500.0,
                 damping=400.0,
                 stiffness=1000.0,
             ),
             "bogie_joints": ImplicitActuatorCfg(
                 joint_names_expr=["boogie_joint_.*"],
-                velocity_limit_sim=4.0,
-                effort_limit_sim=500.0,
+                joint_velocity_limit=4.0,
+                joint_effort_limit=500.0,
                 damping=200.0,
                 stiffness=250.0,
             ),

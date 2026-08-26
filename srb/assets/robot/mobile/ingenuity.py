@@ -46,8 +46,8 @@ class Ingenuity(Multicopter):
         actuators={
             "rotors": ImplicitActuatorCfg(
                 joint_names_expr=["rotor_joint_[1-2]"],
-                velocity_limit_sim=2500 / 60 * 2 * pi,
-                effort_limit_sim=7.5,
+                joint_velocity_limit=2500 / 60 * 2 * pi,
+                joint_effort_limit=7.5,
                 stiffness=0.0,
                 damping=1000.0,
             ),

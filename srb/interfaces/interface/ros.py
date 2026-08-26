@@ -21,9 +21,8 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from rclpy.service import Service
 from rclpy.subscription import Subscription
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, JointState, PointCloud2
 from sensor_msgs.msg import Imu as ImuMsg
-from sensor_msgs.msg import JointState, PointCloud2
 from sensor_msgs.msg import PointField as ROSPointField
 from std_msgs.msg import Bool as BoolMsg
 from std_msgs.msg import (
@@ -50,9 +49,8 @@ from srb.core.action import (
     OperationalSpaceControllerAction,
     WheeledDriveAction,
 )
-from srb.core.asset import Articulation, RigidObject, RigidObjectCollection
-from srb.core.manager import SimulationManager
-from srb.core.sensor import Camera, Imu, RayCaster, RayCasterCamera
+from srb.core.asset import BaseArticulation, BaseRigidObject, BaseRigidObjectCollection
+from srb.core.sensor import BaseImu, BaseRayCaster, BaseRayCasterCamera, Camera
 from srb.utils.camera import create_pointcloud_from_depth, create_pointcloud_from_rgbd
 from srb.utils.math import subtract_frame_transforms
 
@@ -269,7 +267,7 @@ class RosInterface(InterfaceBase):
 
         ## Publish joint states (all scene articulations)
         for articulation_name, pubs in self._pub_joint_states.items():
-            articulation: Articulation = self._env.scene._articulations[
+            articulation: BaseArticulation = self._env.scene._articulations[
                 articulation_name
             ]
             for i in range(self._num_envs):
@@ -280,9 +278,9 @@ class RosInterface(InterfaceBase):
                             frame_id=f"srb/env{i}/{articulation_name}",
                         ),
                         name=articulation.data.joint_names,
-                        position=articulation.data.joint_pos[i],
-                        velocity=articulation.data.joint_vel[i],
-                        effort=articulation.data.applied_torque[i],
+                        position=articulation.data.joint_pos.torch[i].tolist(),
+                        velocity=articulation.data.joint_vel.torch[i].tolist(),
+                        effort=articulation.actuators.applied_effort.torch[i].tolist(),
                     )
                 )
 
@@ -540,7 +538,7 @@ class RosInterface(InterfaceBase):
         for sensor_name, sensor in self._env.scene._sensors.items():
             self._pub_sensors[sensor_name] = {}
 
-            if isinstance(sensor, (Camera, RayCasterCamera)):
+            if isinstance(sensor, (Camera, BaseRayCasterCamera)):
                 self._pub_sensors[sensor_name]["camera_info"] = tuple(
                     self._node.create_publisher(
                         CameraInfo,
@@ -582,7 +580,7 @@ class RosInterface(InterfaceBase):
                         for i in range(self._num_envs)
                     )
 
-            elif isinstance(sensor, RayCaster):
+            elif isinstance(sensor, BaseRayCaster):
                 self._pub_sensors[sensor_name]["pointcloud"] = tuple(
                     self._node.create_publisher(
                         PointCloud2,
@@ -592,7 +590,7 @@ class RosInterface(InterfaceBase):
                     for i in range(self._num_envs)
                 )
 
-            elif isinstance(sensor, Imu):
+            elif isinstance(sensor, BaseImu):
                 self._pub_sensors[sensor_name]["imu"] = tuple(
                     self._node.create_publisher(
                         ImuMsg,
@@ -607,7 +605,7 @@ class RosInterface(InterfaceBase):
             sensor = self._env.scene._sensors[sensor_name]
 
             ## Cameras
-            if isinstance(sensor, (Camera, RayCasterCamera)):
+            if isinstance(sensor, (Camera, BaseRayCasterCamera)):
                 # Camera info
                 for i in range(self._num_envs):
                     camera_info_msg = CameraInfo()
@@ -618,7 +616,7 @@ class RosInterface(InterfaceBase):
                     camera_info_msg.width = sensor.image_shape[1]
                     camera_info_msg.distortion_model = "plumb_bob"
                     camera_info_msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]  # No distortion
-                    intrinsic_matrix = sensor.data.intrinsic_matrices[i]
+                    intrinsic_matrix = sensor.data.intrinsic_matrices.torch[i]
                     camera_info_msg.k = [
                         intrinsic_matrix[0, 0].item(),
                         intrinsic_matrix[0, 1].item(),
@@ -639,7 +637,7 @@ class RosInterface(InterfaceBase):
                         if data_type == "distance_to_image_plane"
                         else f"image_{data_type}"
                     )
-                    img_data_all = sensor.data.output[data_type].cpu().numpy()
+                    img_data_all = sensor.data.output[data_type].torch.cpu().numpy()
                     for i in range(self._num_envs):
                         img_data = img_data_all[i]
 
@@ -703,19 +701,19 @@ class RosInterface(InterfaceBase):
                         depth_type = depth_option
                         break
                 if depth_type:
-                    depth_data = sensor.data.output[depth_type]
+                    depth_data = sensor.data.output[depth_type].torch
 
                     if "rgb" in sensor.data.output.keys():
-                        rgb_data = sensor.data.output["rgb"].cpu().numpy()
+                        rgb_data = sensor.data.output["rgb"].torch.cpu().numpy()
                     elif "rgba" in sensor.data.output.keys():
-                        rgb_data = sensor.data.output["rgba"][..., :3].cpu().numpy()
+                        rgb_data = sensor.data.output["rgba"].torch[..., :3].cpu().numpy()
                     else:
                         rgb_data = None
 
                     for i in range(self._num_envs):
                         if rgb_data is not None:
                             points, colors = create_pointcloud_from_rgbd(
-                                intrinsic_matrix=sensor.data.intrinsic_matrices[i],
+                                intrinsic_matrix=sensor.data.intrinsic_matrices.torch[i],
                                 depth=depth_data[i],
                                 rgb=rgb_data[i],
                                 normalize_rgb=True,
@@ -724,7 +722,7 @@ class RosInterface(InterfaceBase):
                             colors = colors.cpu().numpy().astype(numpy.float32)  # type: ignore
                         else:
                             points = create_pointcloud_from_depth(
-                                intrinsic_matrix=sensor.data.intrinsic_matrices[i],
+                                intrinsic_matrix=sensor.data.intrinsic_matrices.torch[i],
                                 depth=depth_data[i],
                                 device=self._env.device,
                             )
@@ -799,10 +797,10 @@ class RosInterface(InterfaceBase):
 
                         publishers["pointcloud"][i].publish(pointcloud_msg)
 
-            ## RayCaster (non-camera)
-            elif isinstance(sensor, RayCaster):
+            ## BaseRayCaster (non-camera)
+            elif isinstance(sensor, BaseRayCaster):
                 ray_hits_all = (
-                    sensor.data.ray_hits_w.cpu().numpy().astype(numpy.float32)
+                    sensor.data.ray_hits_w.torch.cpu().numpy().astype(numpy.float32)
                 )
                 for i in range(self._num_envs):
                     ray_hits = ray_hits_all[i]
@@ -839,9 +837,9 @@ class RosInterface(InterfaceBase):
                     publishers["pointcloud"][i].publish(pointcloud_msg)
 
             # IMU
-            elif isinstance(sensor, Imu):
-                lin_acc = sensor.data.lin_acc_b
-                ang_vel = sensor.data.ang_vel_b
+            elif isinstance(sensor, BaseImu):
+                lin_acc = sensor.data.lin_acc_b.torch
+                ang_vel = sensor.data.ang_vel_b.torch
                 for i in range(self._num_envs):
                     imu_msg = ImuMsg()
                     imu_msg.header = Header(
@@ -864,8 +862,9 @@ class RosInterface(InterfaceBase):
             self._env.scene._rigid_objects.items()
             | self._env.scene._articulations.items()
         ):
-            assert isinstance(asset, (RigidObject, Articulation))
-            root_pos = asset.data.root_pos_w - self._env.scene.env_origins
+            assert isinstance(asset, (BaseRigidObject, BaseArticulation))
+            root_pos = asset.data.root_pos_w.torch - self._env.scene.env_origins
+            root_quat = asset.data.root_quat_w.torch
             transforms.extend(
                 [
                     TransformStamped(
@@ -881,10 +880,10 @@ class RosInterface(InterfaceBase):
                                 z=root_pos[i, 2].item(),
                             ),
                             rotation=Quaternion(
-                                w=asset.data.root_quat_w[i, 0].item(),
-                                x=asset.data.root_quat_w[i, 1].item(),
-                                y=asset.data.root_quat_w[i, 2].item(),
-                                z=asset.data.root_quat_w[i, 3].item(),
+                                x=root_quat[i, 0].item(),
+                                y=root_quat[i, 1].item(),
+                                z=root_quat[i, 2].item(),
+                                w=root_quat[i, 3].item(),
                             ),
                         ),
                     )
@@ -892,12 +891,12 @@ class RosInterface(InterfaceBase):
                 ]
             )
         for asset_name, asset in self._env.scene._sensors.items():
-            if isinstance(asset, (Camera, RayCasterCamera)):
-                root_pos = asset.data.pos_w - self._env.scene.env_origins
-                root_quat = asset.data.quat_w_ros
-            elif isinstance(asset, (RayCaster, Imu)):
-                root_pos = asset.data.pos_w - self._env.scene.env_origins
-                root_quat = asset.data.quat_w
+            if isinstance(asset, (Camera, BaseRayCasterCamera)):
+                root_pos = asset.data.pos_w.torch - self._env.scene.env_origins
+                root_quat = asset.data.quat_w_ros.torch
+            elif isinstance(asset, (BaseRayCaster, BaseImu)):
+                root_pos = asset.data.pos_w.torch - self._env.scene.env_origins
+                root_quat = asset.data.quat_w.torch
             else:
                 continue
 
@@ -916,10 +915,10 @@ class RosInterface(InterfaceBase):
                                 z=root_pos[i, 2].item(),
                             ),
                             rotation=Quaternion(
-                                w=root_quat[i, 0].item(),  # type: ignore
-                                x=root_quat[i, 1].item(),  # type: ignore
-                                y=root_quat[i, 2].item(),  # type: ignore
-                                z=root_quat[i, 3].item(),  # type: ignore
+                                x=root_quat[i, 0].item(),
+                                y=root_quat[i, 1].item(),
+                                z=root_quat[i, 2].item(),
+                                w=root_quat[i, 3].item(),
                             ),
                         ),
                     )
@@ -928,11 +927,11 @@ class RosInterface(InterfaceBase):
             )
 
         for asset_name, asset in self._env.scene._rigid_object_collections.items():
-            assert isinstance(asset, RigidObjectCollection)
+            assert isinstance(asset, BaseRigidObjectCollection)
             object_pos = (
-                asset.data.object_pos_w
+                asset.data.body_pos_w.torch
                 - self._env.scene.env_origins.unsqueeze(1).repeat(
-                    1, asset.num_objects, 1
+                    1, asset.num_bodies, 1
                 )
             )
             transforms.extend(
@@ -950,24 +949,24 @@ class RosInterface(InterfaceBase):
                                 z=object_pos[i, object_id, 2].item(),
                             ),
                             rotation=Quaternion(
-                                w=asset.data.object_quat_w[i, object_id, 0].item(),
-                                x=asset.data.object_quat_w[i, object_id, 1].item(),
-                                y=asset.data.object_quat_w[i, object_id, 2].item(),
-                                z=asset.data.object_quat_w[i, object_id, 3].item(),
+                                x=asset.data.body_quat_w.torch[i, object_id, 0].item(),
+                                y=asset.data.body_quat_w.torch[i, object_id, 1].item(),
+                                z=asset.data.body_quat_w.torch[i, object_id, 2].item(),
+                                w=asset.data.body_quat_w.torch[i, object_id, 3].item(),
                             ),
                         ),
                     )
                     for i in range(self._num_envs)
-                    for object_id, object_name in enumerate(asset.object_names)
+                    for object_id, object_name in enumerate(asset.body_names)
                 ]
             )
         for asset_name, asset in self._env.scene._articulations.items():
-            assert isinstance(asset, Articulation)
+            assert isinstance(asset, BaseArticulation)
             body_pos, body_quat = subtract_frame_transforms(
-                asset.data.root_pos_w.unsqueeze(1).repeat(1, asset.num_bodies, 1),
-                asset.data.root_quat_w.unsqueeze(1).repeat(1, asset.num_bodies, 1),
-                asset.data.body_pos_w,
-                asset.data.body_quat_w,
+                asset.data.root_pos_w.torch.unsqueeze(1).repeat(1, asset.num_bodies, 1),
+                asset.data.root_quat_w.torch.unsqueeze(1).repeat(1, asset.num_bodies, 1),
+                asset.data.body_pos_w.torch,
+                asset.data.body_quat_w.torch,
             )
             transforms.extend(
                 [
@@ -984,18 +983,15 @@ class RosInterface(InterfaceBase):
                                 z=body_pos[i, body_id, 2].item(),
                             ),
                             rotation=Quaternion(
-                                w=body_quat[i, body_id, 0].item(),
-                                x=body_quat[i, body_id, 1].item(),
-                                y=body_quat[i, body_id, 2].item(),
-                                z=body_quat[i, body_id, 3].item(),
+                                x=body_quat[i, body_id, 0].item(),
+                                y=body_quat[i, body_id, 1].item(),
+                                z=body_quat[i, body_id, 2].item(),
+                                w=body_quat[i, body_id, 3].item(),
                             ),
                         ),
                     )
                     for i in range(self._num_envs)
-                    for (
-                        body_name,
-                        body_id,
-                    ) in asset.root_physx_view.shared_metatype.link_indices.items()
+                    for body_id, body_name in enumerate(asset.body_names)
                 ]
             )
         self._tf_broadcaster.sendTransform(transforms)
@@ -1095,6 +1091,8 @@ class RosInterface(InterfaceBase):
                 for _ in range(rerender_count):
                     self._env.sim.render()
                 if self._env.cfg.wait_for_textures:
+                    from srb.core.manager import SimulationManager
+
                     while SimulationManager.assets_loading():
                         self._env.sim.render()
         else:

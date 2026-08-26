@@ -6,6 +6,7 @@ from os import environ
 from typing import Any, Dict, Iterable, Literal, Mapping, Sequence, get_type_hints
 
 import torch
+from isaaclab_visualizers.kit import KitVisualizerCfg
 from simforge import BakeType
 
 from srb import assets
@@ -123,6 +124,7 @@ class BaseEnvCfg:
 
     ## Visuals
     visuals: VisualsCfg = VisualsCfg()
+    visualizer: KitVisualizerCfg = KitVisualizerCfg()
 
     ## Misc
     truncate_episodes: bool = True
@@ -165,6 +167,7 @@ class BaseEnvCfg:
         self.events.update(self)
 
         ## Simulation
+        self.sim.default_visualizer_cfg = self.visualizer
         self.decimation = math.floor(self.agent_rate / self.env_rate)
         self.sim.dt = self.env_rate
         self.sim.render_interval = self.decimation

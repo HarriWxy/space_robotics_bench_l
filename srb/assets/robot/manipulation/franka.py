@@ -70,15 +70,15 @@ class Franka(SerialManipulator):
         actuators={
             "panda_shoulder": ImplicitActuatorCfg(
                 joint_names_expr=["panda_joint[1-4]"],
-                effort_limit_sim=87.0,
-                velocity_limit_sim=2.175,
+                joint_effort_limit=87.0,
+                joint_velocity_limit=2.175,
                 stiffness=4000.0,
                 damping=800.0,
             ),
             "panda_forearm": ImplicitActuatorCfg(
                 joint_names_expr=["panda_joint[5-7]"],
-                effort_limit_sim=12.0,
-                velocity_limit_sim=2.61,
+                joint_effort_limit=12.0,
+                joint_velocity_limit=2.61,
                 stiffness=4000.0,
                 damping=800.0,
             ),

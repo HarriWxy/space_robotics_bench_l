@@ -7,8 +7,10 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
 from srb.core.manager import EventTermCfg, SceneEntityCfg
-from srb.core.mdp import push_by_setting_velocity  # noqa: F401
-from srb.core.mdp import reset_joints_by_scale
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_joints_by_scale,
+)
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
@@ -108,17 +110,17 @@ class LocomotionTask(Task):
             self._update_visualization_markers()
 
         # Sanitize IMU data to prevent NaN propagation
-        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
         # # Sanitize velocity data
-        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
         # # Sanitize projected gravity
-        # projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b, nan=0.0, posinf=0.0, neginf=0.0)
+        # projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
         # # Sanitize joint data
-        # joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
-        # joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc, nan=0.0, posinf=0.0, neginf=0.0)
-        # joint_applied_torque_robot = torch.nan_to_num(self._robot.data.applied_torque, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_applied_torque_robot = torch.nan_to_num(self._robot.actuators.applied_effort.torch, nan=0.0, posinf=0.0, neginf=0.0)
 
         return _compute_step_return(
             ## Time
@@ -139,11 +141,11 @@ class LocomotionTask(Task):
             joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
                 self._robot.data.soft_joint_pos_limits.torch
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
             joint_acc_robot=self._robot.data.joint_acc.torch,
-            joint_applied_torque_robot=self._robot.data.applied_torque.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Contacts
             contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt).torch,
@@ -206,7 +208,7 @@ def _compute_step_return(
     # tf_quat_robot = torch.nan_to_num(tf_quat_robot, nan=0.0)
     # tf_quat_robot = torch.where(
     #     torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1e-6,
-    #     torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+    #     torch.tensor([0.0, 0.0, 0.0, 1.0], device=device),
     #     tf_quat_robot,
     # )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)

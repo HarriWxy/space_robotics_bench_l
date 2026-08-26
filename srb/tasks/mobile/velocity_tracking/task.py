@@ -151,7 +151,7 @@ class Task(GroundEnv):
         MARKER_OFFSET_Z_ANGVEL = 0.175
 
         ## Common
-        robot_pos_w = self._robot.data.root_link_pos_w
+        robot_pos_w = self._robot.data.root_link_pos_w.torch
         marker_pos = torch.zeros(
             (self.cfg.scene.num_envs, 3), dtype=torch.float32, device=self.device
         )
@@ -168,7 +168,7 @@ class Task(GroundEnv):
 
         ## Target linear velocity
         marker_pos[:, 2] = robot_pos_w[:, 2] + MARKER_OFFSET_Z_LINVEL
-        marker_heading = self._robot.data.heading_w + torch.atan2(
+        marker_heading = self._robot.data.heading_w.torch + torch.atan2(
             self._command[:, 1], self._command[:, 0]
         )
         # VisualizationMarkers expects quaternions in xyzw order.
@@ -189,13 +189,13 @@ class Task(GroundEnv):
         )
 
         ## Robot linear velocity
-        marker_heading = self._robot.data.heading_w + torch.atan2(
-            self._robot.data.root_lin_vel_b[:, 1],
-            self._robot.data.root_lin_vel_b[:, 0],
+        marker_heading = self._robot.data.heading_w.torch + torch.atan2(
+            self._robot.data.root_lin_vel_b.torch[:, 1],
+            self._robot.data.root_lin_vel_b.torch[:, 0],
         )
         marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
         marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
-        marker_scale[:, 0] = torch.norm(self._robot.data.root_lin_vel_b[:, :2], dim=-1)
+        marker_scale[:, 0] = torch.norm(self._robot.data.root_lin_vel_b.torch[:, :2], dim=-1)
         self._marker_robot_linvel.visualize(
             translations=marker_pos,
             orientations=marker_orientation,
@@ -212,7 +212,7 @@ class Task(GroundEnv):
         ).clamp(max=1.0)
         marker_pos[:, 2] = robot_pos_w[:, 2] + MARKER_OFFSET_Z_ANGVEL
         marker_heading = (
-            self._robot.data.heading_w + normalization_fac * self._command[:, 2]
+            self._robot.data.heading_w.torch + normalization_fac * self._command[:, 2]
         )
         marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
         marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
@@ -226,8 +226,8 @@ class Task(GroundEnv):
 
         ## Robot angular velocity
         marker_heading = (
-            self._robot.data.heading_w
-            + normalization_fac * self._robot.data.root_ang_vel_w[:, -1]
+            self._robot.data.heading_w.torch
+            + normalization_fac * self._robot.data.root_ang_vel_w.torch[:, -1]
         )
         marker_orientation[:, 2] = torch.sin(marker_heading * 0.5)
         marker_orientation[:, 3] = torch.cos(marker_heading * 0.5)
@@ -245,10 +245,10 @@ class Task(GroundEnv):
 
         # Sanitize sensor data to prevent NaN/Inf propagation into the
         # observation pipeline and camera rendering (Warp CUDA kernels).
-        imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b, nan=0.0, posinf=0.0, neginf=0.0)
-        imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
-        vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
 
         return _compute_step_return(
             ## Time
@@ -260,8 +260,8 @@ class Task(GroundEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_quat_robot=self._robot.data.root_quat_w,
-            tf_pos_robot=self._robot.data.root_pos_w,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
             vel_lin_robot=vel_lin_robot,
             vel_ang_robot=vel_ang_robot,
             # IMU
@@ -306,7 +306,7 @@ def _compute_step_return(
     tf_quat_robot = torch.nan_to_num(tf_quat_robot, nan=0.0)
     tf_quat_robot = torch.where(
         torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1e-6,
-        torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+        torch.tensor([0.0, 0.0, 0.0, 1.0], device=device),
         tf_quat_robot,
     )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
