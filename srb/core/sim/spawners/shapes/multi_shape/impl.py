@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING, Tuple
 from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg, spawn_multi_asset
 from pxr import Usd
 
+# from ...wrappers import MultiAssetSpawnerCfg
+
 if TYPE_CHECKING:
     from .cfg import MultiShapeSpawnerCfg
 
@@ -30,7 +32,6 @@ def spawn_multi_shape(
         prim_path=prim_path,
         cfg=MultiAssetSpawnerCfg(
             assets_cfg=assets_cfg,
-            random_choice=cfg.random_choice,
             spawn_paths=cfg.spawn_paths,
             mass_props=cfg.mass_props,
             rigid_props=cfg.rigid_props,

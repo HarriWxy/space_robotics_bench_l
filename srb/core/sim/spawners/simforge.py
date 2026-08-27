@@ -14,6 +14,8 @@ from simforge.integrations.isaaclab.spawner.from_files import UsdFileCfg
 from simforge.utils import logging
 from simforge.utils.color import color_palette_hue
 
+# from .wrappers import MultiAssetSpawnerCfg
+
 if TYPE_CHECKING:
     from simforge.integrations.isaaclab.spawner.simforge_asset.cfg import (
         SimforgeAssetCfg,
@@ -50,7 +52,9 @@ def _ensure_mesh_collision_api(
     meshes = [
         prim
         for prim in Usd.PrimRange(root_prim, predicate)
-        if prim.IsA(UsdGeom.Mesh) and not prim.IsInstance() and not prim.IsInstanceProxy()
+        if prim.IsA(UsdGeom.Mesh)
+        and not prim.IsInstance()
+        and not prim.IsInstanceProxy()
     ]
     if not meshes:
         raise RuntimeError(

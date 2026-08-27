@@ -266,7 +266,6 @@ class RandomUnitreeQuadruped(LeggedRobot):
     asset_cfg: ArticulationCfg = UnitreeGo2().asset_cfg.copy()  # type: ignore
     asset_cfg.prim_path = "{ENV_REGEX_NS}/anymal"
     asset_cfg.spawn = MultiAssetSpawnerCfg(
-        random_choice=False,
         assets_cfg=(
             UnitreeA1().asset_cfg.spawn,  # type: ignore
             UnitreeGo1().asset_cfg.spawn,  # type: ignore

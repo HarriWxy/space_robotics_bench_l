@@ -1363,7 +1363,6 @@ class RandomURManipulator(SerialManipulator):
     asset_cfg: ArticulationCfg = UR30().asset_cfg.copy()  # type: ignore
     asset_cfg.prim_path = "{ENV_REGEX_NS}/anymal"
     asset_cfg.spawn = MultiAssetSpawnerCfg(
-        random_choice=False,
         assets_cfg=(
             UR3e().asset_cfg.spawn,  # type: ignore
             UR5().asset_cfg.spawn,  # type: ignore

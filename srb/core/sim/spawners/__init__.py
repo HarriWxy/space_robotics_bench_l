@@ -7,3 +7,4 @@ from simforge.integrations.isaaclab.spawner import (  # noqa: F401
 from .simforge import spawn_simforge_static_asset  # noqa: F401
 from .particles import *  # noqa: F403
 from .shapes import *  # noqa: F403
+# from .wrappers import MultiAssetSpawnerCfg  # noqa: F401

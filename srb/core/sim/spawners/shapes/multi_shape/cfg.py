@@ -3,8 +3,11 @@ from typing import Literal, Sequence, Tuple
 
 from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.sim.spawners.spawner_cfg import SpawnerCfg
+
 from srb.core.sim import ShapeCfg
 from srb.utils.cfg import configclass
+
+# from ...wrappers import MultiAssetSpawnerCfg
 
 from .impl import spawn_multi_shape
 
@@ -27,8 +30,6 @@ class MultiShapeSpawnerCfg(MultiAssetSpawnerCfg, ShapeCfg):
 
     axis: Literal["X", "Y", "Z"] = "Z"
     """Axis of cylinder|capsule|cone"""
-
-    random_choice: bool = True
 
     spawn_paths: list[str | None] | None = None
     """Optional concrete spawn paths, one per shape configuration.
