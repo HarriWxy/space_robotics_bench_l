@@ -1,0 +1,72 @@
+seed: 42
+device: null
+num_steps_per_env: 24
+max_iterations: 1500
+empirical_normalization: true
+randomize_reset_episode_progress: 0.0
+clip_actions: 1.0
+save_interval: 50
+experiment_name: srb_fpo
+run_name: ""
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+eval_episodes: 10
+flow_eval_modes: [zero, random]
+flow_eval_fixed_seed: 12345
+enable_post_training_eval: false
+post_eval_checkpoint_interval: 1
+resume: false
+load_run: ".*"
+load_checkpoint: "model_.*.pt"
+
+obs:
+  actor_keys: [state, proprio, command]
+  critic_keys: null
+
+policy:
+  class_name: ActorCritic
+  init_noise_std: 1.0
+  actor_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [256, 256, 256]
+  activation: elu
+  actor_scale: 1.0
+  actor_mlp_output_scale: 1.0
+  actor_final_layer_weight_scale: null
+  timestep_embed_dim: 8
+  training_sampling_steps: null
+  cfm_loss_t_inverse_cdf_beta: 1.0
+  sampling_steps: 8
+  cfm_loss_reduction: sqrt
+  action_perturb_std: 0.02
+
+algorithm:
+  class_name: FPO
+  num_learning_epochs: 16
+  num_mini_batches: 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  adam_betas: [0.9, 0.999]
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  knn_entropy_coef: 0.0
+  knn_entropy_k: 1
+  desired_kl: 1.0e-4
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: false
+  clip_param: 0.05
+  trust_region_mode: aspo
+  normalize_advantage: true
+  normalize_advantage_per_mini_batch: false
+  advantage_clamp: [100.0, 100.0]
+  n_samples_per_action: 16
+  cfm_diff_clamp_max: 10.0
+  cfm_loss_clamp: 20.0
+  cfm_loss_clamp_negative_advantages: true
+  cfm_loss_clamp_negative_advantages_max: 20.0
+  storage_action_noise_std: 0.0
+  ema_decay: 0.95
+  ema_warmup_steps: 500
+

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from srb._typing import AnyEnv, AnyEnvCfg
 
 import os 
-os.environ['CUDA_VISIBLE_DEVICES']='1'
+# os.environ['CUDA_VISIBLE_DEVICES']='1'
 
 FRAMEWORK_NAME = "policyflow"
 

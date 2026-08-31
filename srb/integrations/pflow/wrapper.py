@@ -119,7 +119,10 @@ class SrbEnvWrapper(Wrapper):
                 "critic_observations": critic_obs,
             }
         else:
-            obs_act =  torch.cat([obs_dict["state"],obs_dict["proprio"]],dim=-1)
+            obs_act =  torch.cat([obs_dict["state"].flatten(start_dim=1),
+                    obs_dict["proprio"].flatten(start_dim=1),
+                    obs_dict["proprio_dyn"].flatten(start_dim=1),
+                    obs_dict["command"].flatten(start_dim=1),],dim=-1)
             observations_dict = {
                 "actor_observations": obs_act,
                 "critic_observations": obs_act,

@@ -880,6 +880,10 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.dreamer import main as dreamer
 
             dreamer.run(workflow=WORKFLOW, **kwargs)
+        case "fpo":
+            from srb.integrations.fpo import main as fpo
+
+            fpo.run(workflow=WORKFLOW, **kwargs)
         case _skrl if algo.startswith("skrl"):
             from srb.integrations.skrl import main as skrl
 
@@ -906,6 +910,10 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.dreamer import main as dreamer
 
             dreamer.run(workflow=WORKFLOW, **kwargs)
+        case "fpo":
+            from srb.integrations.fpo import main as fpo
+
+            fpo.run(workflow=WORKFLOW, **kwargs)
         case _skrl if algo.startswith("skrl"):
             from srb.integrations.skrl import main as skrl
 
@@ -2606,6 +2614,9 @@ class SupportedAlgo(str, Enum):
 
     # PolicyFlow
     POLICYFLOW = auto()
+
+    # Flow Policy Optimization
+    FPO = auto()
 
     def __str__(self) -> str:
         return self.name.lower()

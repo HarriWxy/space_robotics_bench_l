@@ -421,9 +421,23 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
         # Enum
         if isinstance(obj, enum.Enum):
             if isinstance(updates, str):
-                return obj.__class__[updates.strip().upper()]
+                normalized_updates = updates.strip()
+                try:
+                    return obj.__class__[normalized_updates.upper()]
+                except KeyError:
+                    # ``str, Enum`` members using ``auto()`` have values such
+                    # as ``"4"``. OmegaConf can preserve that value instead
+                    # of the member name when rebuilding a registered config.
+                    # Accept both representations for CLI overrides.
+                    for member in obj.__class__:
+                        if str(member.value).upper() == normalized_updates.upper():
+                            return member
             if isinstance(updates, Mapping) and "_name_" in updates.keys():
                 return obj.__class__[updates["_name_"]]
+            if updates is not None:
+                for member in obj.__class__:
+                    if updates == member.value or str(updates) == str(member.value):
+                        return member
             if updates is None and hasattr(obj, "NONE"):
                 # Handle enums with "NONE" value
                 return obj.__class__.NONE  # type: ignore
