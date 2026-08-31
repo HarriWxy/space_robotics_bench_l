@@ -1,0 +1,58 @@
+# SRB runner
+seed: 0
+device: null
+max_iterations: 1500
+rollout_steps: 24
+replay_rollouts: 4
+warmup_rollouts: 4
+update_epochs: 2
+batch_size: 1024
+save_interval: 50
+log_interval: 1
+eval_steps: 0
+empirical_normalization: true
+observation_clip: 10.0
+randomize_reset_episode_progress: true
+validate: true
+
+# SRB observation mapping. A null critic_keys value reuses the actor input.
+obs:
+  actor_keys: [state, proprio, proprio_dyn, command]
+  critic_keys: null
+
+smoothing:
+  enabled: false
+
+# PyTorch interval-flow policy and critic
+hidden_sizes: [256, 256]
+initial_log_std: -1.0
+actor_learning_rate: 2.0e-4
+critic_learning_rate: 2.0e-4
+max_grad_norm: 1.0
+
+# Direct-ratio recent-centered ExO-PPO
+gamma: 0.99
+gae_lambda: 0.95
+exo_clip_radius: 0.2
+exo_beta: 5.0
+entropy_coefficient: 0.0
+max_log_ratio: 12.0
+target_kl: 0.0
+
+# Recent-policy one-step flow self-distillation
+ofp_coefficient: 0.1
+flow_mix: 0.8
+consistency_mix: 0.2
+guidance_mix: 0.05
+guidance_scale: 1.0
+condition_dropout: 0.1
+contraction_steps: 50000
+minimum_contraction: 0.05
+ema_initial_decay: 0.75
+ema_max_decay: 0.9999
+ema_ramp_steps: 10000
+
+warm_start_time: 0.0
+eval_every_rollouts: 20
+eval_episodes: 5
+stochastic_eval: false

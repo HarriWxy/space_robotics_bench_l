@@ -880,6 +880,10 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.dreamer import main as dreamer
 
             dreamer.run(workflow=WORKFLOW, **kwargs)
+        case "exoppo":
+            from srb.integrations.exoppo import main as exoppo
+
+            exoppo.run(workflow=WORKFLOW, **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -910,6 +914,10 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.dreamer import main as dreamer
 
             dreamer.run(workflow=WORKFLOW, **kwargs)
+        case "exoppo":
+            from srb.integrations.exoppo import main as exoppo
+
+            exoppo.run(workflow=WORKFLOW, **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -2617,6 +2625,9 @@ class SupportedAlgo(str, Enum):
 
     # Flow Policy Optimization
     FPO = auto()
+
+    # PyTorch direct-ratio ExO-PPO with one-step flow
+    EXOPPO = auto()
 
     def __str__(self) -> str:
         return self.name.lower()
