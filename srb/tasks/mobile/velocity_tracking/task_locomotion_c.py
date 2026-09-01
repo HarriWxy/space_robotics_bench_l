@@ -26,18 +26,18 @@ from .task import EventCfg, SceneCfg, Task, TaskCfg
 class LocomotionCurriculumCfg:
     """Training stages expressed in total simulated environment transitions."""
 
-    enabled: bool = True
+    enabled: bool = False
     fixed_stage: int = 2
     stage_env_steps: tuple[int, int] = (20_000_000, 60_000_000)
     linear_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 1.0)
     lateral_velocity_scales: tuple[float, float, float] = (0.0, 0.5, 1.0)
-    angular_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 1.0)
+    angular_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 0.15)
     zero_command_probabilities: tuple[float, float, float] = (0.25, 0.1, 0.05)
     command_interval_ranges: tuple[
         tuple[float, float],
         tuple[float, float],
         tuple[float, float],
-    ] = ((2.0, 4.0), (1.0, 3.0), (0.5, 5.0))
+    ] = ((2.0, 4.0), (1.0, 3.0), (4.0, 5.0))
     joint_position_ranges: tuple[
         tuple[float, float],
         tuple[float, float],
@@ -141,9 +141,9 @@ def randomize_velocity_command_curriculum(
     )
     command = getattr(unwrapped_env, env_attr_name)
     num_commands = len(env_ids)
-    heading = 2.0 * torch.pi * torch.rand(
+    heading = 0.25 * torch.pi *( torch.rand(
         num_commands, device=unwrapped_env.device
-    )
+    )   +  1)
     speed = linear_velocity_magnitudes[stage] * torch.rand(
         num_commands, device=unwrapped_env.device
     )
