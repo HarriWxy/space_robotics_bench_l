@@ -7,7 +7,10 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
 from srb.core.manager import EventTermCfg, SceneEntityCfg
-from srb.core.mdp import reset_joints_by_scale
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_joints_by_scale,
+)
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
@@ -201,7 +204,7 @@ class LocomotionEventCfg(EventCfg):
             "env_attr_name": "_command",
             "curriculum_enabled": True,
             "fixed_stage": 2,
-            "stage_env_steps": (20_000_000, 60_000_000),
+            "stage_env_steps": (20_000_000, 60_000_000),  # total 100_000_000
             "linear_velocity_magnitudes": (0.35, 0.6, 1.0),
             "lateral_velocity_scales": (0.0, 0.5, 1.0),
             "angular_velocity_magnitudes": (0.35, 0.6, 1.0),
