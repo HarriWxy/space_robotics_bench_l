@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from srb.integrations.exoppo.wrapper import SrbExoPpoEnvWrapper
+from srb.integrations.tensorboard import write_scalars
 from srb.utils import logging
 from srb.wrappers import maybe_wrap_action_smoothing
 
@@ -236,6 +237,8 @@ def _collect_rollout(
     completed_return_sum = torch.zeros((), device=trainer.device)
     completed_length_sum = torch.zeros((), device=trainer.device)
     completed_count = torch.zeros((), device=trainer.device)
+    reward_term_sums: dict[str, torch.Tensor] = {}
+    reward_term_counts: dict[str, int] = {}
 
     trainer.policy.eval()
     trainer.value.eval()
@@ -275,6 +278,22 @@ def _collect_rollout(
                 update=True,
             )
             next_value = trainer.value(next_critic)
+
+            reward_terms = extras.get("reward_terms")
+            if isinstance(reward_terms, Mapping):
+                for name, term in reward_terms.items():
+                    term_tensor = torch.as_tensor(
+                        term, dtype=torch.float32, device=trainer.device
+                    ).reshape(-1)
+                    if term_tensor.numel() == 0:
+                        continue
+                    key = str(name)
+                    reward_term_sums[key] = reward_term_sums.get(
+                        key, torch.zeros((), device=trainer.device)
+                    ) + term_tensor.sum()
+                    reward_term_counts[key] = reward_term_counts.get(key, 0) + int(
+                        term_tensor.numel()
+                    )
 
             if wrapped_env.bootstrap_truncated:
                 # This fallback matches the established Isaac Lab runner behavior.
@@ -355,8 +374,21 @@ def _collect_rollout(
     count = float(completed_count.cpu())
     metrics: dict[str, float] = {}
     if count > 0.0:
-        metrics["rollout/episode_return"] = float(completed_return_sum.cpu()) / count
-        metrics["rollout/episode_length"] = float(completed_length_sum.cpu()) / count
+        metrics["rollout/ep_rew_mean"] = float(completed_return_sum.cpu()) / count
+        metrics["rollout/ep_len_mean"] = float(completed_length_sum.cpu()) / count
+
+    return_variance = torch.var(returns, unbiased=False)
+    if float(return_variance) > 1.0e-8:
+        explained_variance = 1.0 - torch.var(
+            returns - value_tensor, unbiased=False
+        ) / return_variance
+        metrics["train/explained_variance"] = float(explained_variance.cpu())
+    else:
+        metrics["train/explained_variance"] = 0.0
+
+    for name, term_sum in reward_term_sums.items():
+        term_count = reward_term_counts[name]
+        metrics[f"rollout/reward_terms/{name}"] = float(term_sum.cpu()) / term_count
     return rollout, actor_observation, critic_observation, metrics, step_count
 
 
@@ -516,7 +548,7 @@ def _train(
     if bool(raw_cfg.get("randomize_reset_episode_progress", True)):
         wrapped_env.episode_length_buf.random_(0, wrapped_env.max_episode_length)
 
-    replay = replay_class(trainer.config.replay_rollouts)
+    replay = replay_class(trainer.config.replay_N)
     previous_action = torch.zeros(
         (wrapped_env.num_envs, wrapped_env.num_actions),
         dtype=torch.float32,
@@ -568,7 +600,7 @@ def _train(
                 {
                     "replay/samples": float(len(replay)),
                     "replay/rollouts": float(replay.rollout_count),
-                    "time/steps_per_second": environment_steps
+                    "time/fps": environment_steps
                     / max(time.monotonic() - started, 1e-6),
                 }
             )
@@ -578,8 +610,7 @@ def _train(
                     {f"train/{key}": value for key, value in train_metrics.items()}
                 )
 
-            for name, value in metrics.items():
-                writer.add_scalar(name, value, environment_steps)
+            write_scalars(writer, metrics, environment_steps)
             writer.flush()
             if (iteration + 1) % log_interval == 0:
                 concise = {
@@ -587,9 +618,12 @@ def _train(
                     for key, value in metrics.items()
                     if key
                     in {
-                        "rollout/episode_return",
+                        "rollout/ep_rew_mean",
                         "train/actor_loss",
                         "train/critic_loss",
+                        "train/loss",
+                        "train/approx_kl",
+                        "train/clip_fraction",
                         "train/ratio",
                         "train/recent_ratio",
                         "train/flow_loss",

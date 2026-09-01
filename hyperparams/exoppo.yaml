@@ -1,13 +1,13 @@
 # SRB runner
 seed: 0
 device: null
-max_iterations: 1500
-rollout_steps: 24
-replay_rollouts: 4
+max_iterations: 15000
+rollout_steps: 128
+replay_N: 4
 warmup_rollouts: 4
 update_epochs: 2
 batch_size: 1024
-save_interval: 50
+save_interval: 2500
 log_interval: 1
 eval_steps: 0
 empirical_normalization: true

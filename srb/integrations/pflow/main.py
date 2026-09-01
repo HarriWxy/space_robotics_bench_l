@@ -1,25 +1,23 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import gymnasium
 import torch
+from isaacsim.simulation_app import SimulationApp
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
-import gymnasium
-from isaacsim.simulation_app import SimulationApp
-
 from srb.integrations.pflow.wrapper import SrbEnvWrapper
+from srb.integrations.tensorboard import make_policyflow_tensorboard_cb
 from srb.utils import logging
 from srb.utils.cfg import last_file, stamp_dir
 from srb.wrappers import maybe_wrap_action_smoothing
 
 if TYPE_CHECKING:
     from srb._typing import AnyEnv, AnyEnvCfg
-
-import os 
-# os.environ['CUDA_VISIBLE_DEVICES']='1'
 
 FRAMEWORK_NAME = "policyflow"
 
@@ -36,15 +34,21 @@ def run(
     continue_training: bool | None = None,
     **kwargs,
 ):
+    import policyflow_torch.runners.runner_isaaclab as policyflow_runner
     from policyflow_torch.agents import PolicyFlow
     from policyflow_torch.modules import (  # for intellisense
-        ContinuousNormalizingFlow,
         ConditionLinearLayer,
+        ContinuousNormalizingFlow,
         FlowMlp,
         Network,
     )
     from policyflow_torch.runners import IsaaclabRunner
     from policyflow_torch.storage import ReplayBuffer
+
+    # PolicyFlow's runner imports its callback into a module global.  Replace
+    # only that callback so the third-party package keeps its native metrics
+    # while SRB adds the SB3/SBX-compatible names and x-axis.
+    policyflow_runner.make_tensorboard_cb = make_policyflow_tensorboard_cb
 
     # Pop the entire smoothing config dictionary to be handled separately.
     smoothing_cfg = agent_cfg.pop("smoothing", {})
@@ -76,7 +80,9 @@ def run(
     actor_obs_len = agent_cfg.pop("actor_obs_len", 1)
 
     actor_hidden_dims = agent_cfg.pop("actor_hidden_dims", [512, 256, 128])
-    actor_activations = agent_cfg.pop("actor_activations", ["mish", "mish", "mish", "linear"])  #
+    actor_activations = agent_cfg.pop(
+        "actor_activations", ["mish", "mish", "mish", "linear"]
+    )
     critic_hidden_dims = agent_cfg.pop("critic_hidden_dims", [512, 256, 128])
     critic_activations = agent_cfg.pop("critic_activations", ["mish", "mish", "mish", "linear"])
 
