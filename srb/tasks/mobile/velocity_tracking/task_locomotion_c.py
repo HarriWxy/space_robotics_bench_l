@@ -148,13 +148,15 @@ def randomize_velocity_command_curriculum(
         num_commands, device=unwrapped_env.device
     )
 
-    command[env_ids, 0] = speed * torch.cos(heading)
-    command[env_ids, 1] = (
-        lateral_velocity_scales[stage] * speed * torch.sin(heading)
-    )
-    command[env_ids, 2] = angular_velocity_magnitudes[stage] * (
-        2.0 * torch.rand(num_commands, device=unwrapped_env.device) - 1.0
-    )
+    command[env_ids, 0] = 0.35 # speed * torch.cos(heading)
+    command[env_ids, 1] = 0
+    # (
+    #     lateral_velocity_scales[stage] * speed * torch.sin(heading)
+    # )
+    command[env_ids, 2] = 0
+    # angular_velocity_magnitudes[stage] * (
+    #     2.0 * torch.rand(num_commands, device=unwrapped_env.device) - 1.0
+    # )
 
     zero_command_mask = torch.rand(num_commands, device=unwrapped_env.device) < (
         zero_command_probabilities[stage]
