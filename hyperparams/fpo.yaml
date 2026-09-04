@@ -1,11 +1,10 @@
-seed: 42
-device: null
-num_steps_per_env: 24
-max_iterations: 1500
+# seed: 42
+num_steps_per_env: 64
+max_iterations: 5000
 empirical_normalization: true
 randomize_reset_episode_progress: 0.0
 clip_actions: 1.0
-save_interval: 50
+save_interval: 1000
 experiment_name: srb_fpo
 run_name: ""
 logger: tensorboard
@@ -13,7 +12,7 @@ neptune_project: isaaclab
 wandb_project: isaaclab
 eval_episodes: 10
 flow_eval_modes: [zero, random]
-flow_eval_fixed_seed: 12345
+# flow_eval_fixed_seed: 12345
 enable_post_training_eval: false
 post_eval_checkpoint_interval: 1
 resume: false

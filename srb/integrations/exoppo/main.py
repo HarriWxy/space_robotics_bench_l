@@ -566,6 +566,9 @@ def _train(
     writer = _summary_writer(logdir)
     started = time.monotonic()
     last_iteration = start_iteration - 1
+    write_scalars(
+        writer, {"config/replay_N": trainer.config.replay_N, }, step=0, )
+    writer.flush()
     try:
         for iteration in range(start_iteration, max_iterations):
             (
