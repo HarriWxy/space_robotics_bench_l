@@ -32,6 +32,9 @@ if __name__ == "__main__":
         # "--cfg",
         # "IGNORE",
         "env.domain=moon",
+        # Main paper condition: sample planar commands instead of the legacy
+        # forward-only demonstration (override with ``forward`` when needed).
+        "env.curriculum.command_mode=omnidirectional",
         # "env.sample=primitive",
         "env.robot=unitree_h1",
         # "env.stage=2",
@@ -39,6 +42,8 @@ if __name__ == "__main__":
         # "env.episode_length_s=8.0",
         # "env.num_envs=2",
         "env.num_envs=256",
+        # 6104 * 64 * 256 ~= 100M environment transitions.
+        "agent.max_iterations=6104",
         "env.malloc_scale=0.25",
         "env.sim.device=cuda",
         "--headless",

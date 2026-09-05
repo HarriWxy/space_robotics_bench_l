@@ -269,9 +269,15 @@ def make_policyflow_tensorboard_cb(directory: str):
                 step,
             )
 
+        task_metrics: dict[str, list[Any]] = {}
         for episode_info in stat.get("info", []):
             if not isinstance(episode_info, Mapping):
                 continue
+            for key, value in episode_info.items():
+                if isinstance(key, str) and key.startswith("metrics/"):
+                    task_metrics.setdefault(key.removeprefix("metrics/"), []).append(
+                        value
+                    )
             write_scalars(
                 writer,
                 {
@@ -280,6 +286,14 @@ def make_policyflow_tensorboard_cb(directory: str):
                 },
                 step,
             )
+        write_scalars(
+            writer,
+            {
+                f"rollout/metrics/{name}": _mean_values(values)
+                for name, values in sorted(task_metrics.items())
+            },
+            step,
+        )
         writer.flush()
 
     return callback

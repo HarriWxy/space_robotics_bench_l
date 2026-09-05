@@ -623,6 +623,7 @@ def randomize_gravity_uniform(
     else:
         gravity_direction = gravity / gravity_magnitude
 
+    gravity_value = float(gravity_magnitude.item())
     gravity_dir_attr = physics_scene.GetGravityDirectionAttr()
     if gravity_dir_attr is None:
         physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction.tolist()))
@@ -630,9 +631,28 @@ def randomize_gravity_uniform(
         gravity_dir_attr.Set(Gf.Vec3f(*gravity_direction.tolist()))
     gravity_mag_attr = physics_scene.GetGravityMagnitudeAttr()
     if gravity_mag_attr is None:
-        physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude.item())
+        physics_scene.CreateGravityMagnitudeAttr(gravity_value)
     else:
-        gravity_mag_attr.Set(gravity_magnitude.item())
+        gravity_mag_attr.Set(gravity_value)
+
+    # Some tasks expose the runtime gravity magnitude as an observation.  Keep
+    # that buffer synchronized with the global USD physics-scene randomization
+    # without imposing a dependency on tasks that do not use it.
+    unwrapped_env = getattr(env, "unwrapped", env)
+    if getattr(unwrapped_env, "_tracks_gravity_magnitude", False):
+        unwrapped_env._gravity_magnitude_scalar = gravity_value  # type: ignore[attr-defined]
+        gravity_buffer = getattr(unwrapped_env, "_gravity_magnitude", None)
+        if isinstance(gravity_buffer, torch.Tensor):
+            gravity_buffer.fill_(gravity_value)
+        elif hasattr(unwrapped_env, "num_envs") and hasattr(
+            unwrapped_env, "device"
+        ):
+            unwrapped_env._gravity_magnitude = torch.full(  # type: ignore[attr-defined]
+                (int(unwrapped_env.num_envs),),
+                gravity_value,
+                dtype=torch.float32,
+                device=unwrapped_env.device,
+            )
 
 
 def follow_xform_orientation_linear_trajectory(

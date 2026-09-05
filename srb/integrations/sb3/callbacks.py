@@ -21,20 +21,26 @@ class RewardTermsTensorboardCallback(BaseCallback):
             return True
 
         reward_terms_by_name: dict[str, list[float]] = {}
+        task_metrics_by_name: dict[str, list[float]] = {}
         for info in infos:
             if not isinstance(info, dict):
                 continue
 
             reward_terms = info.get("reward_terms")
-            if not isinstance(reward_terms, dict):
-                continue
+            if isinstance(reward_terms, dict):
+                for reward_term, value in reward_terms.items():
+                    reward_terms_by_name.setdefault(reward_term, []).extend(
+                        self._to_float_list(value)
+                    )
 
-            for reward_term, value in reward_terms.items():
-                reward_terms_by_name.setdefault(reward_term, []).extend(
-                    self._to_float_list(value)
-                )
+            for name, value in info.items():
+                if isinstance(name, str) and name.startswith("metrics/"):
+                    metric_name = name.removeprefix("metrics/")
+                    task_metrics_by_name.setdefault(metric_name, []).extend(
+                        self._to_float_list(value)
+                    )
 
-        if not reward_terms_by_name:
+        if not reward_terms_by_name and not task_metrics_by_name:
             return True
 
         for reward_term, reward_term_values in sorted(reward_terms_by_name.items()):
@@ -74,6 +80,24 @@ class RewardTermsTensorboardCallback(BaseCallback):
             self.logger.record_mean(
                 f"rollout/reward_terms/{reward_term}",
                 mean_reward_term,
+                exclude="tensorboard" if self._tensorboard_writer is not None else None,
+            )
+
+        for metric_name, metric_values in sorted(task_metrics_by_name.items()):
+            if not metric_values:
+                continue
+            metric_array = numpy.asarray(metric_values, dtype=numpy.float32)
+            mean_metric = float(metric_array.mean())
+            tag = f"rollout/metrics/{metric_name}"
+            if self._tensorboard_writer is not None:
+                self._tensorboard_writer.add_scalar(
+                    tag,
+                    mean_metric,
+                    self.num_timesteps,
+                )
+            self.logger.record_mean(
+                tag,
+                mean_metric,
                 exclude="tensorboard" if self._tensorboard_writer is not None else None,
             )
 

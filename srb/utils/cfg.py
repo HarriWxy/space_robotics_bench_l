@@ -20,6 +20,7 @@ DEFAULT_DATETIME_FORMAT = "%Y%m%dT%H%M%S"
 SUPPORTED_FRAMEWORKS = {
     "dreamer": {"multi_algo": False},
     "exoppo": {"multi_algo": False},
+    "flowppo": {"multi_algo": False},
     "fpo": {"multi_algo": False},
     "policyflow": {"multi_algo": False},
     "sb3": {"multi_algo": True},

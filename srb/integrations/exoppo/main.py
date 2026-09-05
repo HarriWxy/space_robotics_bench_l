@@ -1,14 +1,16 @@
-"""Run the PyTorch ExO-PPO one-step flow against an SRB environment."""
+"""Run ExO-PPO or the matched standard Flow-PPO baseline against SRB."""
 
 from __future__ import annotations
 
+import json
 import random
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, is_dataclass
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Iterator, Literal
 
 import gymnasium
 import numpy as np
@@ -60,6 +62,30 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _jsonable(value: Any) -> Any:
+    """Convert config-like values into a deterministic JSON representation."""
+
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Enum):
+        return _jsonable(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, torch.Tensor):
+        return _jsonable(value.detach().cpu().tolist())
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -89,6 +115,7 @@ def _resolve_checkpoint(
     model: Path | None,
     continue_training: bool | None,
     untrained: bool,
+    algorithm_name: str = FRAMEWORK_NAME,
 ) -> Path | None:
     if model:
         return Path(model)
@@ -96,7 +123,8 @@ def _resolve_checkpoint(
         checkpoint = _last_checkpoint(logdir)
         if checkpoint is None and workflow == "eval" and not untrained:
             raise FileNotFoundError(
-                f"No ExO-PPO checkpoint matching model_<iteration>.pt in {logdir}"
+                f"No {algorithm_name} checkpoint matching model_<iteration>.pt in "
+                f"{logdir}"
             )
         return checkpoint
     return None
@@ -153,6 +181,97 @@ def _build_flow_config(
     return config, max_iterations
 
 
+def _write_run_manifest(
+    *,
+    logdir: Path,
+    workflow: Literal["train", "eval"],
+    algorithm: str,
+    env_id: str,
+    env_cfg: Any,
+    raw_cfg: Mapping[str, Any],
+    flow_config: Any,
+    wrapped_env: SrbExoPpoEnvWrapper,
+    actor_observation_dim: int,
+    critic_observation_dim: int,
+) -> None:
+    """Persist the resolved experiment contract next to TensorBoard events."""
+
+    logdir.mkdir(parents=True, exist_ok=True)
+    environment: dict[str, Any] = {}
+    for name in (
+        "seed",
+        "domain",
+        "gravity",
+        "num_envs",
+        "agent_rate",
+        "env_rate",
+        "episode_length_s",
+        "truncate_episodes",
+        "is_finite_horizon",
+        "include_gravity_magnitude",
+        "gravity_magnitude_reference",
+    ):
+        if env_cfg is not None and hasattr(env_cfg, name):
+            environment[name] = _jsonable(getattr(env_cfg, name))
+    curriculum = getattr(env_cfg, "curriculum", None)
+    if curriculum is not None:
+        environment["curriculum"] = {
+            name: _jsonable(getattr(curriculum, name))
+            for name in (
+                "enabled",
+                "fixed_stage",
+                "command_mode",
+                "forward_command",
+                "stage_env_steps",
+            )
+            if hasattr(curriculum, name)
+        }
+    sim_cfg = getattr(env_cfg, "sim", None)
+    if sim_cfg is not None:
+        environment["simulation"] = {
+            name: _jsonable(getattr(sim_cfg, name))
+            for name in ("device", "dt", "render_interval", "gravity")
+            if hasattr(sim_cfg, name)
+        }
+
+    replay_steps = int(flow_config.replay_N) * int(flow_config.rollout_steps)
+    replay_steps *= int(wrapped_env.num_envs)
+    manifest = {
+        "framework": FRAMEWORK_NAME,
+        "algorithm": algorithm,
+        "workflow": workflow,
+        "env_id": env_id,
+        "environment": environment,
+        "agent_config": _jsonable(raw_cfg),
+        "resolved_flow_config": _jsonable(flow_config),
+        "observation": {
+            "actor_keys": list(wrapped_env.actor_keys)
+            if wrapped_env.actor_keys is not None
+            else None,
+            "critic_keys": list(wrapped_env.critic_keys)
+            if wrapped_env.critic_keys is not None
+            else None,
+            "actor_dim": actor_observation_dim,
+            "critic_dim": critic_observation_dim,
+        },
+        "action": {
+            "num_actions": wrapped_env.num_actions,
+            "low": _jsonable(wrapped_env.action_low),
+            "high": _jsonable(wrapped_env.action_high),
+        },
+        "replay": {
+            "rollout_steps": int(flow_config.rollout_steps),
+            "replay_N": int(flow_config.replay_N),
+            "warmup_rollouts": int(flow_config.warmup_rollouts),
+            "capacity_environment_steps": replay_steps,
+        },
+    }
+    (logdir / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _normalize(
     observation: torch.Tensor,
     normalizer: Any,
@@ -205,6 +324,107 @@ def _policy_sample(
     )
 
 
+def _accumulate_scalar_batch(
+    sums: dict[str, torch.Tensor],
+    counts: dict[str, int],
+    name: str,
+    value: Any,
+    *,
+    device: torch.device,
+) -> None:
+    """Accumulate finite per-environment scalar values for rollout logging."""
+
+    values = torch.as_tensor(value, dtype=torch.float32, device=device).reshape(-1)
+    if values.numel() == 0:
+        return
+    finite = torch.isfinite(values)
+    if not finite.any():
+        return
+    values = values[finite]
+    sums[name] = sums.get(name, torch.zeros((), device=device)) + values.sum()
+    counts[name] = counts.get(name, 0) + int(values.numel())
+
+
+def _iter_task_metrics(
+    extras: Mapping[str, Any],
+) -> Iterator[tuple[str, Any]]:
+    """Return flat ``metrics/*`` entries from SRB's info mapping.
+
+    Direct SRB environments currently expose these entries as flat keys.  The
+    nested ``metrics`` case is accepted as well so the logger remains usable
+    through wrappers that group info fields.
+    """
+
+    nested = extras.get("metrics")
+    if isinstance(nested, Mapping):
+        for name, value in nested.items():
+            name = str(name)
+            if name:
+                yield f"metrics/{name}", value
+    for name, value in extras.items():
+        name = str(name)
+        if name.startswith("metrics/") and name != "metrics/":
+            yield name, value
+
+
+def _train_torch_ppo_replay(trainer: Any, replay: Any) -> dict[str, float]:
+    """Optimize the shared Torch replay window with the standard PPO loss."""
+
+    tensors = replay.tensors()
+    advantages = tensors["advantages"]
+    tensors["advantages"] = (advantages - advantages.mean()) / (
+        advantages.std(unbiased=False) + 1e-8
+    )
+
+    metric_sums: dict[str, float] = {}
+    metric_count = 0
+    sample_count = len(replay)
+    stop_early = False
+    for _ in range(trainer.config.update_epochs):
+        order = torch.randperm(sample_count, device=trainer.device)
+        for offset in range(0, sample_count, trainer.config.batch_size):
+            indices = order[offset : offset + trainer.config.batch_size]
+            actor_metrics = trainer.actor_train_step(
+                tensors["actor_observations"][indices],
+                tensors["pre_tanh_actions"][indices],
+                tensors["flow_init"][indices],
+                tensors["flow_start"][indices],
+                tensors["behavior_log_prob"][indices],
+                tensors["advantages"][indices],
+            )
+            critic_metrics = trainer.critic_train_step(
+                tensors["critic_observations"][indices],
+                tensors["returns"][indices],
+            )
+            for key, value in {**actor_metrics, **critic_metrics}.items():
+                metric_sums[key] = metric_sums.get(key, 0.0) + float(
+                    value.detach().cpu()
+                )
+            metric_count += 1
+            if (
+                trainer.config.target_kl > 0.0
+                and float(actor_metrics["approx_kl"].detach().cpu())
+                > trainer.config.target_kl
+            ):
+                stop_early = True
+                break
+        if stop_early:
+            break
+
+    averaged = {key: value / max(metric_count, 1) for key, value in metric_sums.items()}
+    averaged["learning_rate"] = float(trainer.actor_optimizer.param_groups[0]["lr"])
+    averaged["critic_learning_rate"] = float(
+        trainer.critic_optimizer.param_groups[0]["lr"]
+    )
+    averaged["value_loss"] = averaged.get("critic_loss", 0.0)
+    averaged["loss"] = averaged.get("actor_loss", 0.0) + averaged.get(
+        "critic_loss", 0.0
+    )
+    averaged["early_stop"] = float(stop_early)
+    averaged["minibatches"] = float(metric_count)
+    return averaged
+
+
 def _collect_rollout(
     *,
     wrapped_env: SrbExoPpoEnvWrapper,
@@ -239,6 +459,8 @@ def _collect_rollout(
     completed_count = torch.zeros((), device=trainer.device)
     reward_term_sums: dict[str, torch.Tensor] = {}
     reward_term_counts: dict[str, int] = {}
+    task_metric_sums: dict[str, torch.Tensor] = {}
+    task_metric_counts: dict[str, int] = {}
 
     trainer.policy.eval()
     trainer.value.eval()
@@ -282,18 +504,23 @@ def _collect_rollout(
             reward_terms = extras.get("reward_terms")
             if isinstance(reward_terms, Mapping):
                 for name, term in reward_terms.items():
-                    term_tensor = torch.as_tensor(
-                        term, dtype=torch.float32, device=trainer.device
-                    ).reshape(-1)
-                    if term_tensor.numel() == 0:
-                        continue
                     key = str(name)
-                    reward_term_sums[key] = reward_term_sums.get(
-                        key, torch.zeros((), device=trainer.device)
-                    ) + term_tensor.sum()
-                    reward_term_counts[key] = reward_term_counts.get(key, 0) + int(
-                        term_tensor.numel()
+                    _accumulate_scalar_batch(
+                        reward_term_sums,
+                        reward_term_counts,
+                        key,
+                        term,
+                        device=trainer.device,
                     )
+
+            for name, metric in _iter_task_metrics(extras):
+                _accumulate_scalar_batch(
+                    task_metric_sums,
+                    task_metric_counts,
+                    name.removeprefix("metrics/"),
+                    metric,
+                    device=trainer.device,
+                )
 
             if wrapped_env.bootstrap_truncated:
                 # This fallback matches the established Isaac Lab runner behavior.
@@ -379,9 +606,9 @@ def _collect_rollout(
 
     return_variance = torch.var(returns, unbiased=False)
     if float(return_variance) > 1.0e-8:
-        explained_variance = 1.0 - torch.var(
-            returns - value_tensor, unbiased=False
-        ) / return_variance
+        explained_variance = (
+            1.0 - torch.var(returns - value_tensor, unbiased=False) / return_variance
+        )
         metrics["train/explained_variance"] = float(explained_variance.cpu())
     else:
         metrics["train/explained_variance"] = 0.0
@@ -389,6 +616,9 @@ def _collect_rollout(
     for name, term_sum in reward_term_sums.items():
         term_count = reward_term_counts[name]
         metrics[f"rollout/reward_terms/{name}"] = float(term_sum.cpu()) / term_count
+    for name, metric_sum in task_metric_sums.items():
+        metric_count = task_metric_counts[name]
+        metrics[f"rollout/metrics/{name}"] = float(metric_sum.cpu()) / metric_count
     return rollout, actor_observation, critic_observation, metrics, step_count
 
 
@@ -400,11 +630,10 @@ def _checkpoint_payload(
     iteration: int,
     environment_steps: int,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "format_version": 1,
+        "algorithm": "ExO-PPO" if hasattr(trainer, "recent_policy") else "Flow-PPO",
         "policy": trainer.policy.state_dict(),
-        "recent_policy": trainer.recent_policy.state_dict(),
-        "ema_teacher": trainer.ema_teacher.state_dict(),
         "value": trainer.value.state_dict(),
         "actor_optimizer": trainer.actor_optimizer.state_dict(),
         "critic_optimizer": trainer.critic_optimizer.state_dict(),
@@ -413,8 +642,17 @@ def _checkpoint_payload(
         "environment_steps": environment_steps,
         "actor_observation_stats": actor_stats.state_dict(),
         "critic_observation_stats": critic_stats.state_dict(),
+        "observation_dims": {
+            "actor": getattr(trainer.policy, "obs_dim", None),
+            "critic": getattr(trainer, "critic_obs_dim", None),
+        },
         "config": asdict(trainer.config),
     }
+    if hasattr(trainer, "recent_policy"):
+        payload["recent_policy"] = trainer.recent_policy.state_dict()
+    if hasattr(trainer, "ema_teacher"):
+        payload["ema_teacher"] = trainer.ema_teacher.state_dict()
+    return payload
 
 
 def _save_checkpoint(
@@ -446,16 +684,47 @@ def _load_checkpoint(
     actor_stats: Any,
     critic_stats: Any,
     load_optimizers: bool,
+    expected_algorithm: str | None = None,
 ) -> tuple[int, int]:
     checkpoint = torch.load(path, map_location=trainer.device, weights_only=False)
+    saved_algorithm = checkpoint.get("algorithm")
+    if (
+        expected_algorithm is not None
+        and saved_algorithm is not None
+        and saved_algorithm != expected_algorithm
+    ):
+        raise ValueError(
+            f"Checkpoint algorithm {saved_algorithm!r} does not match the "
+            f"requested {expected_algorithm!r} workflow"
+        )
+    saved_dims = checkpoint.get("observation_dims", {})
+    if isinstance(saved_dims, Mapping):
+        current_dims = {
+            "actor": getattr(trainer.policy, "obs_dim", None),
+            "critic": getattr(trainer, "critic_obs_dim", None),
+        }
+        mismatches = {
+            name: (saved_dims.get(name), current_dims[name])
+            for name in current_dims
+            if saved_dims.get(name) is not None
+            and current_dims[name] is not None
+            and int(saved_dims[name]) != int(current_dims[name])
+        }
+        if mismatches:
+            raise ValueError(
+                "Checkpoint observation dimensions do not match the current "
+                f"contract: {mismatches}"
+            )
     trainer.policy.load_state_dict(checkpoint["policy"])
     trainer.value.load_state_dict(checkpoint["value"])
-    trainer.recent_policy.load_state_dict(
-        checkpoint.get("recent_policy", checkpoint["policy"])
-    )
-    trainer.ema_teacher.load_state_dict(
-        checkpoint.get("ema_teacher", checkpoint["policy"])
-    )
+    if hasattr(trainer, "recent_policy"):
+        trainer.recent_policy.load_state_dict(
+            checkpoint.get("recent_policy", checkpoint["policy"])
+        )
+    if hasattr(trainer, "ema_teacher"):
+        trainer.ema_teacher.load_state_dict(
+            checkpoint.get("ema_teacher", checkpoint["policy"])
+        )
     trainer.update_step = int(checkpoint.get("update_step", 0))
     if load_optimizers:
         if "actor_optimizer" in checkpoint:
@@ -506,6 +775,7 @@ def _train(
     replay_class: type,
     flatten_rollout: Any,
     compute_gae: Any,
+    algorithm_name: str = FRAMEWORK_NAME,
 ) -> None:
     empirical_normalization = bool(raw_cfg.get("empirical_normalization", True))
     observation_clip = float(raw_cfg.get("observation_clip", 10.0))
@@ -522,13 +792,14 @@ def _train(
     start_iteration = 0
     environment_steps = 0
     if checkpoint is not None:
-        logging.info(f"Loading ExO-PPO checkpoint from {checkpoint}")
+        logging.info(f"Loading {algorithm_name} checkpoint from {checkpoint}")
         start_iteration, environment_steps = _load_checkpoint(
             checkpoint,
             trainer=trainer,
             actor_stats=actor_stats,
             critic_stats=critic_stats,
             load_optimizers=True,
+            expected_algorithm=algorithm_name,
         )
 
     actor_observation = _normalize(
@@ -566,8 +837,26 @@ def _train(
     writer = _summary_writer(logdir)
     started = time.monotonic()
     last_iteration = start_iteration - 1
+    replay_capacity_steps = (
+        int(trainer.config.replay_N)
+        * int(trainer.config.rollout_steps)
+        * int(wrapped_env.num_envs)
+    )
     write_scalars(
-        writer, {"config/replay_N": trainer.config.replay_N, }, step=0, )
+        writer,
+        {
+            "config/seed": trainer.config.seed,
+            "config/num_envs": wrapped_env.num_envs,
+            "config/total_steps": trainer.config.total_steps,
+            "config/rollout_steps": trainer.config.rollout_steps,
+            "config/replay_N": trainer.config.replay_N,
+            "config/replay_capacity_steps": replay_capacity_steps,
+            "config/warmup_rollouts": trainer.config.warmup_rollouts,
+            "config/gamma": trainer.config.gamma,
+            "config/gae_lambda": trainer.config.gae_lambda,
+        },
+        step=0,
+    )
     writer.flush()
     try:
         for iteration in range(start_iteration, max_iterations):
@@ -634,7 +923,7 @@ def _train(
                     }
                 }
                 logging.info(
-                    f"ExO-PPO iteration={iteration} steps={environment_steps} "
+                    f"{algorithm_name} iteration={iteration} steps={environment_steps} "
                     f"metrics={concise}"
                 )
             if (iteration + 1) % save_interval == 0:
@@ -667,6 +956,8 @@ def _evaluate(
     raw_cfg: Mapping[str, Any],
     checkpoint: Path | None,
     normalizer_class: type,
+    logdir: Path | None = None,
+    algorithm_name: str = FRAMEWORK_NAME,
 ) -> None:
     empirical_normalization = bool(raw_cfg.get("empirical_normalization", True))
     observation_clip = float(raw_cfg.get("observation_clip", 10.0))
@@ -678,13 +969,14 @@ def _evaluate(
     actor_stats = normalizer_class((raw_actor.shape[1],), device=wrapped_env.device)
     critic_stats = normalizer_class((raw_critic.shape[1],), device=wrapped_env.device)
     if checkpoint is not None:
-        logging.info(f"Loading ExO-PPO checkpoint from {checkpoint}")
+        logging.info(f"Loading {algorithm_name} checkpoint from {checkpoint}")
         _load_checkpoint(
             checkpoint,
             trainer=trainer,
             actor_stats=actor_stats,
             critic_stats=critic_stats,
             load_optimizers=False,
+            expected_algorithm=algorithm_name,
         )
     actor_observation = _normalize(
         raw_actor,
@@ -704,32 +996,89 @@ def _evaluate(
     stochastic = bool(trainer.config.stochastic_eval)
     trainer.policy.eval()
     step = 0
-    with torch.inference_mode():
-        while sim_app.is_running() and (eval_steps == 0 or step < eval_steps):
-            sample = _policy_sample(
-                trainer,
-                actor_observation,
-                previous_action,
-                has_previous_action,
-                warm_start_time=trainer.config.warm_start_time,
-                stochastic=stochastic,
-            )
-            raw_actor, _, _, terminated, truncated, _ = wrapped_env.step(
-                sample.pre_tanh_action
-            )
-            actor_observation = _normalize(
-                raw_actor,
-                actor_stats,
-                enabled=empirical_normalization,
-                clip=observation_clip,
-                update=False,
-            )
-            done = terminated | truncated
-            previous_action.copy_(sample.pre_tanh_action)
-            has_previous_action.fill_(True)
-            previous_action[done] = 0.0
-            has_previous_action[done] = False
-            step += 1
+    writer = _summary_writer(logdir) if logdir is not None else None
+    episode_returns = torch.zeros(
+        wrapped_env.num_envs, dtype=torch.float32, device=wrapped_env.device
+    )
+    episode_lengths = torch.zeros(
+        wrapped_env.num_envs, dtype=torch.long, device=wrapped_env.device
+    )
+    completed_return_sum = torch.zeros((), device=wrapped_env.device)
+    completed_length_sum = torch.zeros((), device=wrapped_env.device)
+    completed_count = torch.zeros((), device=wrapped_env.device)
+    step_reward_sum = torch.zeros((), device=wrapped_env.device)
+    task_metric_sums: dict[str, torch.Tensor] = {}
+    task_metric_counts: dict[str, int] = {}
+    try:
+        with torch.inference_mode():
+            while sim_app.is_running() and (eval_steps == 0 or step < eval_steps):
+                sample = _policy_sample(
+                    trainer,
+                    actor_observation,
+                    previous_action,
+                    has_previous_action,
+                    warm_start_time=trainer.config.warm_start_time,
+                    stochastic=stochastic,
+                )
+                (
+                    raw_actor,
+                    _,
+                    reward,
+                    terminated,
+                    truncated,
+                    extras,
+                ) = wrapped_env.step(sample.pre_tanh_action)
+                actor_observation = _normalize(
+                    raw_actor,
+                    actor_stats,
+                    enabled=empirical_normalization,
+                    clip=observation_clip,
+                    update=False,
+                )
+                for name, metric in _iter_task_metrics(extras):
+                    _accumulate_scalar_batch(
+                        task_metric_sums,
+                        task_metric_counts,
+                        name.removeprefix("metrics/"),
+                        metric,
+                        device=wrapped_env.device,
+                    )
+                episode_returns += reward
+                episode_lengths += 1
+                step_reward_sum += reward.sum()
+                done = terminated | truncated
+                done_float = done.to(dtype=torch.float32)
+                completed_return_sum += (episode_returns * done_float).sum()
+                completed_length_sum += (episode_lengths * done_float).sum()
+                completed_count += done_float.sum()
+                episode_returns.masked_fill_(done, 0.0)
+                episode_lengths.masked_fill_(done, 0)
+                previous_action.copy_(sample.pre_tanh_action)
+                has_previous_action.fill_(True)
+                previous_action[done] = 0.0
+                has_previous_action[done] = False
+                step += 1
+    finally:
+        if writer is not None:
+            metrics: dict[str, float] = {}
+            completed = float(completed_count.cpu())
+            if completed > 0.0:
+                metrics["eval/ep_rew_mean"] = (
+                    float(completed_return_sum.cpu()) / completed
+                )
+                metrics["eval/ep_len_mean"] = (
+                    float(completed_length_sum.cpu()) / completed
+                )
+            if step > 0:
+                metrics["eval/mean_step_reward"] = float(step_reward_sum.cpu()) / (
+                    step * wrapped_env.num_envs
+                )
+            for name, metric_sum in task_metric_sums.items():
+                metric_count = task_metric_counts[name]
+                metrics[f"eval/metrics/{name}"] = float(metric_sum.cpu()) / metric_count
+            write_scalars(writer, metrics, step * wrapped_env.num_envs)
+            writer.flush()
+            writer.close()
 
 
 def run(
@@ -745,9 +1094,11 @@ def run(
     untrained: bool = False,
     **kwargs: Any,
 ) -> None:
-    """Run only the PyTorch implementation from ``ExO-PPO/flow``."""
+    """Run the PyTorch ExO-PPO pipeline or its matched Flow-PPO objective."""
 
-    del env_cfg, kwargs
+    objective = str(kwargs.pop("objective", "exo")).lower()
+    if kwargs:
+        logging.debug("Ignoring ExO-PPO runner kwargs: %s", sorted(kwargs))
     try:
         from flow.torch_buffer import (
             TorchReplayWindow,
@@ -756,12 +1107,17 @@ def run(
             generalized_advantage_estimate,
         )
         from flow.torch_train import TorchTrainConfig, Trainer, validate_config
+
+        if objective == "ppo":
+            from flow.torch_ppo_train import PPOTrainer
+        else:
+            PPOTrainer = None
     except ImportError as error:
         raise ImportError(
             "The SRB ExO-PPO integration requires the Python 3.12-compatible "
             "editable ExO-PPO package. In the 'srb' conda environment run: "
             "python -m pip install --no-deps --no-build-isolation -e "
-            "/root/R2A/ExO-PPO"
+            "/root/R2A/Algos/ExO-PPO"
         ) from error
 
     raw_cfg = _as_dict(agent_cfg)
@@ -796,12 +1152,48 @@ def run(
         torch.cuda.manual_seed_all(flow_config.seed)
 
     initial_actor, initial_critic, _ = wrapped_env.reset()
-    trainer = Trainer(
-        flow_config,
-        obs_dim=int(initial_actor.shape[1]),
-        action_dim=wrapped_env.num_actions,
-        critic_obs_dim=int(initial_critic.shape[1]),
-        device=wrapped_env.device,
+    if objective not in ("exo", "ppo"):
+        raise ValueError(f"Unsupported ExO-PPO objective {objective!r}")
+    if objective == "ppo":
+        assert PPOTrainer is not None
+        if int(initial_actor.shape[1]) != int(initial_critic.shape[1]):
+            raise ValueError(
+                "flowppo currently requires actor and critic observation dimensions "
+                "to match; set obs.critic_keys=null for the shared-policy baseline."
+            )
+
+        class SrbPPOTrainer(PPOTrainer):
+            def train_torch_replay(self, replay: Any) -> dict[str, float]:
+                return _train_torch_ppo_replay(self, replay)
+
+        trainer = SrbPPOTrainer(
+            flow_config,
+            obs_dim=int(initial_actor.shape[1]),
+            action_dim=wrapped_env.num_actions,
+            device=wrapped_env.device,
+        )
+        trainer.critic_obs_dim = int(initial_critic.shape[1])
+        algorithm_name = "Flow-PPO"
+    else:
+        trainer = Trainer(
+            flow_config,
+            obs_dim=int(initial_actor.shape[1]),
+            action_dim=wrapped_env.num_actions,
+            critic_obs_dim=int(initial_critic.shape[1]),
+            device=wrapped_env.device,
+        )
+        algorithm_name = "ExO-PPO"
+    _write_run_manifest(
+        logdir=Path(logdir),
+        workflow=workflow,
+        algorithm=algorithm_name,
+        env_id=env_id,
+        env_cfg=env_cfg,
+        raw_cfg=raw_cfg,
+        flow_config=flow_config,
+        wrapped_env=wrapped_env,
+        actor_observation_dim=int(initial_actor.shape[1]),
+        critic_observation_dim=int(initial_critic.shape[1]),
     )
     checkpoint = _resolve_checkpoint(
         workflow=workflow,
@@ -809,6 +1201,7 @@ def run(
         model=model,
         continue_training=continue_training,
         untrained=untrained,
+        algorithm_name=algorithm_name,
     )
     if workflow == "train":
         _train(
@@ -823,10 +1216,13 @@ def run(
             replay_class=TorchReplayWindow,
             flatten_rollout=flatten_torch_rollout,
             compute_gae=generalized_advantage_estimate,
+            algorithm_name=algorithm_name,
         )
         return
     if checkpoint is None and not untrained:
-        raise FileNotFoundError("An ExO-PPO checkpoint is required for evaluation")
+        raise FileNotFoundError(
+            f"A {algorithm_name} checkpoint is required for evaluation"
+        )
     _evaluate(
         wrapped_env=wrapped_env,
         sim_app=sim_app,
@@ -834,4 +1230,6 @@ def run(
         raw_cfg=raw_cfg,
         checkpoint=checkpoint,
         normalizer_class=TorchRunningMeanStd,
+        logdir=Path(logdir),
+        algorithm_name=algorithm_name,
     )

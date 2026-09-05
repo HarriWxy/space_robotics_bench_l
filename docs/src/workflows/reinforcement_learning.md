@@ -77,7 +77,7 @@ While training, you might be interested in monitoring the progress and comparing
 tensorboard --logdir ./space_robotics_bench/logs --bind_all
 ```
 
-The PPO-like integrations (`fpo`, `exoppo`, and `policyflow`) expose the same
+The PPO-like integrations (`fpo`, `exoppo`, `flowppo`, and `policyflow`) expose the same
 comparison fields as SB3/SBX: `rollout/ep_rew_mean`, `rollout/ep_len_mean`,
 `time/fps`, and the common `train/` fields `approx_kl`, `clip_fraction`,
 `clip_range`, `entropy_loss`, `explained_variance`, `learning_rate`, `loss`,

@@ -1,5 +1,6 @@
 from dataclasses import MISSING
-from typing import List, Sequence
+from math import isfinite
+from typing import List, Literal, Sequence
 
 import torch
 
@@ -28,6 +29,11 @@ class LocomotionCurriculumCfg:
 
     enabled: bool = False
     fixed_stage: int = 2
+    # Keep the historical forward-only demonstration available explicitly.  The
+    # curriculum sampler is used for the paper runs and can be selected with
+    # ``env.curriculum.command_mode=omnidirectional``.
+    command_mode: Literal["forward", "omnidirectional"] = "forward"
+    forward_command: tuple[float, float, float] = (0.35, 0.0, 0.0)
     stage_env_steps: tuple[int, int] = (20_000_000, 60_000_000)
     linear_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 1.0)
     lateral_velocity_scales: tuple[float, float, float] = (0.0, 0.5, 1.0)
@@ -120,6 +126,8 @@ def randomize_velocity_command_curriculum(
     env_attr_name: str,
     curriculum_enabled: bool,
     fixed_stage: int,
+    command_mode: str,
+    forward_command: tuple[float, ...],
     stage_env_steps: tuple[int, ...],
     linear_velocity_magnitudes: tuple[float, ...],
     lateral_velocity_scales: tuple[float, ...],
@@ -141,25 +149,42 @@ def randomize_velocity_command_curriculum(
     )
     command = getattr(unwrapped_env, env_attr_name)
     num_commands = len(env_ids)
-    heading = 0.25 * torch.pi *( torch.rand(
-        num_commands, device=unwrapped_env.device
-    )   +  1)
-    speed = linear_velocity_magnitudes[stage] * torch.rand(
-        num_commands, device=unwrapped_env.device
-    )
+    if command_mode == "forward":
+        forward = torch.as_tensor(
+            forward_command,
+            dtype=command.dtype,
+            device=unwrapped_env.device,
+        )
+        if forward.shape != (3,):
+            raise ValueError(
+                "forward_command must contain exactly (vx, vy, wz), got "
+                f"shape={tuple(forward.shape)}"
+            )
+        command[env_ids] = forward
+    elif command_mode == "omnidirectional":
+        heading = (
+            2.0 * torch.pi * torch.rand(num_commands, device=unwrapped_env.device)
+            - torch.pi
+        )
+        speed = linear_velocity_magnitudes[stage] * torch.rand(
+            num_commands, device=unwrapped_env.device
+        )
+        command[env_ids, 0] = speed * torch.cos(heading)
+        command[env_ids, 1] = (
+            lateral_velocity_scales[stage] * speed * torch.sin(heading)
+        )
+        command[env_ids, 2] = angular_velocity_magnitudes[stage] * (
+            2.0 * torch.rand(num_commands, device=unwrapped_env.device) - 1.0
+        )
+    else:
+        raise ValueError(
+            "command_mode must be either 'forward' or 'omnidirectional', got "
+            f"{command_mode!r}"
+        )
 
-    command[env_ids, 0] = 0.35 # speed * torch.cos(heading)
-    command[env_ids, 1] = 0
-    # (
-    #     lateral_velocity_scales[stage] * speed * torch.sin(heading)
-    # )
-    command[env_ids, 2] = 0
-    # angular_velocity_magnitudes[stage] * (
-    #     2.0 * torch.rand(num_commands, device=unwrapped_env.device) - 1.0
-    # )
-
-    zero_command_mask = torch.rand(num_commands, device=unwrapped_env.device) < (
-        zero_command_probabilities[stage]
+    zero_command_mask = (
+        torch.rand(num_commands, device=unwrapped_env.device)
+        < zero_command_probabilities[stage]
     )
     command[env_ids[zero_command_mask]] = 0.0
 
@@ -206,6 +231,8 @@ class LocomotionEventCfg(EventCfg):
             "env_attr_name": "_command",
             "curriculum_enabled": True,
             "fixed_stage": 2,
+            "command_mode": "forward",
+            "forward_command": (0.35, 0.0, 0.0),
             "stage_env_steps": (20_000_000, 60_000_000),  # total 100_000_000
             "linear_velocity_magnitudes": (0.35, 0.6, 1.0),
             "lateral_velocity_scales": (0.0, 0.5, 1.0),
@@ -245,6 +272,14 @@ class LocomotionTaskCfg(TaskCfg):
     rewards: LocomotionRewardCfg = LocomotionRewardCfg()
     terminations: LocomotionTerminationCfg = LocomotionTerminationCfg()
 
+    ## Optional physics conditioning
+    # ``projected_gravity_robot`` carries direction but not magnitude.  This
+    # scalar is therefore opt-in so existing checkpoints retain their input
+    # shape, while gravity-ablation runs can request a normalized magnitude in
+    # the proprioception group.
+    include_gravity_magnitude: bool = False
+    gravity_magnitude_reference: float = 9.80665
+
     ## Time
     env_rate: float = 1.0 / 125.0
 
@@ -269,6 +304,8 @@ class LocomotionTaskCfg(TaskCfg):
             {
                 "curriculum_enabled": self.curriculum.enabled,
                 "fixed_stage": self.curriculum.fixed_stage,
+                "command_mode": self.curriculum.command_mode,
+                "forward_command": self.curriculum.forward_command,
                 "stage_env_steps": self.curriculum.stage_env_steps,
                 "linear_velocity_magnitudes": (
                     self.curriculum.linear_velocity_magnitudes
@@ -313,6 +350,14 @@ class LocomotionTaskCfg(TaskCfg):
             )
         if not 0 <= self.curriculum.fixed_stage < num_stages:
             raise ValueError("fixed_stage must refer to an existing curriculum stage.")
+        if self.curriculum.command_mode not in ("forward", "omnidirectional"):
+            raise ValueError(
+                "command_mode must be either 'forward' or 'omnidirectional'."
+            )
+        if len(self.curriculum.forward_command) != 3:
+            raise ValueError("forward_command must contain exactly (vx, vy, wz).")
+        if not all(isfinite(float(value)) for value in self.curriculum.forward_command):
+            raise ValueError("forward_command must contain finite values.")
         if any(
             previous >= current
             for previous, current in zip(
@@ -344,6 +389,13 @@ class LocomotionTaskCfg(TaskCfg):
                 "Each command_interval_range must be positive and ordered as "
                 "(min, max)."
             )
+        if self.include_gravity_magnitude and (
+            not isfinite(float(self.gravity_magnitude_reference))
+            or self.gravity_magnitude_reference <= 0.0
+        ):
+            raise ValueError(
+                "gravity_magnitude_reference must be finite and positive."
+            )
 
 
 ############
@@ -353,9 +405,27 @@ class LocomotionTaskCfg(TaskCfg):
 
 class LocomotionTask(Task):
     cfg: LocomotionTaskCfg
+    _tracks_gravity_magnitude = True
+    _gravity_magnitude_scalar: float
 
     def __init__(self, cfg: LocomotionTaskCfg, **kwargs):
         super().__init__(cfg, **kwargs)
+
+        gravity_domain = self.cfg.gravity or self.cfg.domain
+        gravity_buffer = getattr(self, "_gravity_magnitude", None)
+        if not isinstance(gravity_buffer, torch.Tensor) or tuple(
+            gravity_buffer.shape
+        ) != (self.num_envs,):
+            gravity_buffer = torch.full(
+                (self.num_envs,),
+                float(gravity_domain.gravity_magnitude),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        elif gravity_buffer.device != self.device:
+            gravity_buffer = gravity_buffer.to(device=self.device)
+        self._gravity_magnitude = gravity_buffer
+        self._gravity_magnitude_scalar = float(gravity_buffer[0].item())
 
         ## Get scene assets
         self._contacts_robot: ContactSensor = self.scene["contacts_robot"]
@@ -570,6 +640,11 @@ class LocomotionTask(Task):
             min_body_up_z=self.cfg.terminations.min_body_up_z,
         )
 
+        if self.cfg.include_gravity_magnitude:
+            step_return.observation["proprio"]["gravity_magnitude"] = (
+                self._gravity_magnitude / self.cfg.gravity_magnitude_reference
+            ).unsqueeze(-1)
+
         tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
         body_up_z = tf_rotmat_robot[:, 2, 2]
         linear_tracking_error = torch.norm(
@@ -612,6 +687,9 @@ class LocomotionTask(Task):
                 device=self.device,
             )
 
+        fallen_height = tf_pos_robot[:, 2] < self.cfg.terminations.min_base_height
+        bad_orientation = body_up_z < self.cfg.terminations.min_body_up_z
+
         return StepReturn(
             step_return.observation,
             step_return.reward,
@@ -622,11 +700,16 @@ class LocomotionTask(Task):
                     linear_tracking_error,
                     float(current_stage),
                 ),
+                # Gravity is global across environments; log the cached scalar.
+                "metrics/gravity_magnitude": self._gravity_magnitude_scalar,
                 "metrics/command_lin_error": linear_tracking_error,
                 "metrics/command_ang_error": angular_tracking_error,
                 "metrics/tracking_success": tracking_success.float(),
                 "metrics/body_up_z": body_up_z,
-                "metrics/fallen": step_return.termination.float(),
+                "metrics/fallen": fallen_height.float(),
+                "metrics/bad_orientation": bad_orientation.float(),
+                "metrics/terminated": step_return.termination.float(),
+                "metrics/truncated": step_return.truncation.float(),
                 "metrics/undesired_contact": undesired_contact.float(),
             },
         )

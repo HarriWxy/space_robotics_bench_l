@@ -1,1 +1,1 @@
-"""SRB integration for the PyTorch ExO-PPO one-step flow implementation."""
+"""SRB integration for PyTorch interval-flow ExO-PPO and Flow-PPO."""

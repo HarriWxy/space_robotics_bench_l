@@ -217,9 +217,17 @@ def run_agent_with_env(
         else:
             sys.argv.extend([f"hydra.run.dir={logdir.as_posix()}"])
 
+    agent_cfg_entry_point = (
+        "flowppo_cfg"
+        if kwargs.get("algo") == "flowppo"
+        else f"{kwargs['algo']}_cfg"
+        if kwargs.get("algo")
+        else None
+    )
+
     @hydra_task_config(
         task_name=env_id,
-        agent_cfg_entry_point=f"{kwargs['algo']}_cfg" if kwargs.get("algo") else None,
+        agent_cfg_entry_point=agent_cfg_entry_point,
         config_path=config_path.as_posix() if config_path else None,
     )
     def hydra_main(env_cfg: Dict[str, Any], agent_cfg: Dict[str, Any] | None = None):
@@ -884,6 +892,10 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.exoppo import main as exoppo
 
             exoppo.run(workflow=WORKFLOW, **kwargs)
+        case "flowppo":
+            from srb.integrations.exoppo import main as exoppo
+
+            exoppo.run(workflow=WORKFLOW, objective="ppo", **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -918,6 +930,10 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.exoppo import main as exoppo
 
             exoppo.run(workflow=WORKFLOW, **kwargs)
+        case "flowppo":
+            from srb.integrations.exoppo import main as exoppo
+
+            exoppo.run(workflow=WORKFLOW, objective="ppo", **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -2628,6 +2644,9 @@ class SupportedAlgo(str, Enum):
 
     # PyTorch direct-ratio ExO-PPO with one-step flow
     EXOPPO = auto()
+
+    # Standard PPO objective using the same interval-flow policy and data path
+    FLOWPPO = auto()
 
     def __str__(self) -> str:
         return self.name.lower()

@@ -1,11 +1,13 @@
-# SRB runner
+# Standard PPO objective using the same IntervalFlowPolicy and SRB rollout
+# adapter as ``exoppo``.  Keep this file aligned with exoppo.yaml except for
+# on-policy replay/warmup and disabled ExO-specific distillation/guidance.
 seed: 0
 device: null
 # 6104 * 64 rollout steps * 256 environments = 100,007,936 transitions.
 max_iterations: 6104
 rollout_steps: 64
-replay_N: 4
-warmup_rollouts: 4
+replay_N: 1
+warmup_rollouts: 1
 update_epochs: 4
 batch_size: 1024
 save_interval: 2500
@@ -16,7 +18,6 @@ observation_clip: 10.0
 randomize_reset_episode_progress: true
 validate: true
 
-# SRB observation mapping. A null critic_keys value reuses the actor input.
 obs:
   actor_keys: [state, proprio, proprio_dyn, command]
   critic_keys: null
@@ -24,14 +25,13 @@ obs:
 smoothing:
   enabled: false
 
-# PyTorch interval-flow policy and critic
 hidden_sizes: [384, 384]
 initial_log_std: -1.0
 actor_learning_rate: 2.0e-4
 critic_learning_rate: 2.0e-4
 max_grad_norm: 1.0
 
-# Direct-ratio recent-centered ExO-PPO
+# ``exo_clip_radius`` is interpreted as PPO epsilon by flow.torch_ppo_train.
 gamma: 0.997
 gae_lambda: 0.95
 exo_clip_radius: 0.2
@@ -40,13 +40,12 @@ entropy_coefficient: 0.0
 max_log_ratio: 12.0
 target_kl: 0.0
 
-# Recent-policy one-step flow self-distillation
-ofp_coefficient: 0.1
+ofp_coefficient: 0.0
 flow_mix: 0.8
 consistency_mix: 0.2
-guidance_mix: 0.05
+guidance_mix: 0.0
 guidance_scale: 1.0
-condition_dropout: 0.1
+condition_dropout: 0.0
 contraction_steps: 50000
 minimum_contraction: 0.05
 ema_initial_decay: 0.75
