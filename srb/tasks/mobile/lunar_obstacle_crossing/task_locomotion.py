@@ -136,7 +136,7 @@ class LocomotionTask(Task):
             joint_acc_robot=self._robot.data.joint_acc.torch,
             joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
             contact_last_air_time=self._contacts_robot.data.last_air_time.torch,  # type: ignore
             # Obstacles

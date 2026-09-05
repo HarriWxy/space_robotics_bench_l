@@ -408,12 +408,12 @@ class Task(ManipulationEnv):
                 else torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
             ),
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_normal_forces_w.torch
             if self._contacts_end_effector is not None
             else None,
             contact_forces_end_effector_collision=(
-                self._contacts_end_effector_collision.data.net_forces_w.torch
+                self._contacts_end_effector_collision.data.net_normal_forces_w.torch
                 if self._contacts_end_effector_collision is not None
                 else None
             ),

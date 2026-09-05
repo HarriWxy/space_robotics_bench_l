@@ -244,8 +244,8 @@ class MultiTask(ManipulationEnv):
             tf_pos_targets=self._targets.data.body_pos_w.torch,
             tf_quat_targets=self._targets.data.body_quat_w.torch,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_normal_forces_w.torch
             if self._contacts_end_effector is not None
             else None,
             contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch

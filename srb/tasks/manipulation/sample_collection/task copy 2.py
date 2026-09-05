@@ -193,8 +193,8 @@ class Task(ManipulationEnv):
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_normal_forces_w.torch
             if self._contacts_end_effector is not None
             else None,
             contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch

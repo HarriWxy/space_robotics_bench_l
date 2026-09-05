@@ -130,7 +130,7 @@ class ObstacleCrossingTask(Task):
             tf_pos_target=self._goal[:, 0:3],
             tf_quat_target=self._goal[:, 3:7],
             joint_pos_robot=self._robot.data.joint_pos.torch,
-            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
         )
 

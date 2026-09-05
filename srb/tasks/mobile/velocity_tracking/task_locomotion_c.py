@@ -537,7 +537,7 @@ class LocomotionTask(Task):
             joint_pos_limits_robot = None
 
         contact_forces_robot = torch.nan_to_num(
-            self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
             nan=0.0,
             posinf=0.0,
             neginf=0.0,

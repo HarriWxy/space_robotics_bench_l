@@ -603,7 +603,7 @@ def _teleop_agent_direct(
                     if env.unwrapped._contacts_end_effector is not None:
                         contacts_end_effector = env.unwrapped._contacts_end_effector
                         contact_forces = (
-                            contacts_end_effector.data.net_forces_w.torch  # type: ignore
+                            contacts_end_effector.data.net_normal_forces_w.torch  # type: ignore
                         )[0].mean(dim=0)
                         contact_ft = torch.cat(
                             [
