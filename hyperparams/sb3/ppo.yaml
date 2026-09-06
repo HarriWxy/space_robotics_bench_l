@@ -1,9 +1,12 @@
-n_timesteps: 200000000
+n_timesteps: 100000000
 policy: "MultiInputPolicy"
+# Policy input for the locomotion comparison. Other tasks can override this
+# with an explicit `agent.observation_keys` value.
+observation_keys: [proprio,proprio_dyn,command]
 batch_size: 1024
 clip_range: 0.1
 ent_coef: 0.01
-gae_lambda: 0.9
+gae_lambda: 0.95
 gamma: 0.997
 learning_rate: lin_0.0001
 max_grad_norm: 0.5

@@ -1,7 +1,7 @@
-from srb.__main__ import main
-import os
 import sys
-# os.environ["EXP_PATH"] = "/root/isaac-sim/apps"
+
+from srb.__main__ import main
+
 
 def run_srb(argv):
     old_argv = sys.argv[:]
@@ -13,19 +13,30 @@ def run_srb(argv):
 
 
 if __name__ == "__main__":
-    # print(os.environ["EXP_PATH"])
     run_srb([
         "agent",
         "train",
         # "eval",
         # "rand",
         "--algo",
-        "sb3_ppo", # policyflow
+        "sb3_ppo",  # policyflow
         "--env",
         "locomotion_velocity_tracking_c",
         # "--cfg",
         # "IGNORE",
         "env.domain=moon",
+        "env.curriculum.enabled=false",
+        "env.curriculum.fixed_stage=2",
+        "env.curriculum.command_mode=forward",
+        "env.curriculum.forward_command=[0.35,0.0,0.0]",
+        "env.curriculum.joint_position_ranges=[[0.9,1.1],[0.9,1.1],[0.9,1.1]]",
+        "env.episode_length_s=30.0",
+        "env.terminations.tracking_linear_error_threshold=0.1",
+        "env.terminations.tracking_angular_error_threshold=0.1",
+        "env.terminations.tracking_min_body_up_z=0.9",
+        "env.terminations.success_min_duration_s=30.0",
+        "env.terminations.success_settle_time_s=1.0",
+        "env.terminations.success_tracking_fraction=0.9",
         # "env.sample=primitive",
         "env.robot=unitree_h1",
         # "env.stage=2",

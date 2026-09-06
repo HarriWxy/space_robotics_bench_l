@@ -99,6 +99,118 @@ _ALGORITHM_DEFAULTS = {
 }
 
 
+class _EnvironmentStepWriter:
+    """Forward scalar logging with cumulative environment steps as x-axis."""
+
+    def __init__(self, writer: Any, runner: Any):
+        self._writer = writer
+        self._runner = runner
+
+    def add_scalar(
+        self,
+        tag: str,
+        scalar_value: Any,
+        global_step: int | None = None,
+        walltime: float | None = None,
+    ) -> None:
+        step = int(self._runner.tot_timesteps)
+        if step <= 0 and global_step is not None:
+            step = int(global_step)
+        self._writer.add_scalar(tag, scalar_value, step, walltime)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._writer, name)
+
+
+def _install_environment_step_logging(runner: Any) -> None:
+    """Use environment-step x-coordinates and weighted episode rates."""
+
+    original_log = runner.log
+
+    def log_with_environment_steps(*args: Any, **kwargs: Any):
+        if args and isinstance(args[0], dict):
+            _aggregate_episode_event_logs(args[0])
+        if runner.writer is not None and not isinstance(
+            runner.writer, _EnvironmentStepWriter
+        ):
+            runner.writer = _EnvironmentStepWriter(runner.writer, runner)
+        return original_log(*args, **kwargs)
+
+    runner.log = log_with_environment_steps
+
+
+def _aggregate_episode_event_logs(locs: dict[str, Any]) -> None:
+    """Replace sparse per-step event counters with rates for FPO's logger.
+
+    The upstream runner averages every value in ``ep_infos``.  A sparse event
+    counter would therefore be divided by rollout steps instead of completed
+    episodes.  Collapse the event tensors before the runner sees them while
+    retaining its normal logging path for all other metrics.
+    """
+
+    episode_infos = locs.get("ep_infos")
+    if not isinstance(episode_infos, list) or not episode_infos:
+        return
+
+    event_names = {
+        "rollout/metrics/episode_completed",
+        "rollout/metrics/episode_success",
+        "rollout/metrics/episode_failed",
+        "rollout/metrics/episode_tracking_fraction",
+        "rollout/metrics/episode_duration_s",
+    }
+    sums: dict[str, torch.Tensor] = {}
+    for episode_info in episode_infos:
+        if not isinstance(episode_info, Mapping):
+            continue
+        for name in event_names:
+            if name not in episode_info:
+                continue
+            value = torch.as_tensor(episode_info[name], dtype=torch.float32)
+            value = value[torch.isfinite(value)]
+            if value.numel() > 0:
+                sums[name] = (
+                    sums.get(name, torch.zeros((), device=value.device)) + value.sum()
+                )
+
+    completed = float(sums.get("rollout/metrics/episode_completed", 0.0))
+    # Remove the sparse counters from the upstream average and, when an
+    # episode completed, add one scalar per rate to the first mapping, which is
+    # the key set the runner visits.
+    filtered_infos = []
+    for episode_info in episode_infos:
+        if isinstance(episode_info, Mapping):
+            filtered_infos.append(
+                {
+                    key: value
+                    for key, value in episode_info.items()
+                    if key not in event_names
+                }
+            )
+        else:
+            filtered_infos.append(episode_info)
+
+    first_info = filtered_infos[0]
+    if not isinstance(first_info, dict):
+        return
+    if completed <= 0.0:
+        locs["ep_infos"] = filtered_infos
+        return
+    first_info["rollout/episode_success_rate"] = (
+        float(sums.get("rollout/metrics/episode_success", 0.0)) / completed
+    )
+    first_info["rollout/episode_failure_rate"] = (
+        float(sums.get("rollout/metrics/episode_failed", 0.0)) / completed
+    )
+    first_info["rollout/episode_tracking_fraction"] = (
+        float(sums.get("rollout/metrics/episode_tracking_fraction", 0.0)) / completed
+    )
+    first_info["rollout/episode_duration_s"] = (
+        float(sums.get("rollout/metrics/episode_duration_s", 0.0)) / completed
+    )
+    locs["ep_infos"] = filtered_infos
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -148,7 +260,7 @@ def _build_config(
             "policy": _POLICY_DEFAULTS,
             "algorithm": _ALGORITHM_DEFAULTS,
             "obs": {
-                "actor_keys": ["state", "proprio", "command"],
+                "actor_keys": ["proprio", "proprio_dyn", "command"],
                 "critic_keys": None,
             },
         },
@@ -192,9 +304,7 @@ def _resolve_checkpoint(
     if workflow == "eval" or continue_training:
         checkpoint = _last_checkpoint(logdir)
         if checkpoint is None and workflow == "eval":
-            raise FileNotFoundError(
-                f"No FPO checkpoint (model_*.pt) found in {logdir}"
-            )
+            raise FileNotFoundError(f"No FPO checkpoint (model_*.pt) found in {logdir}")
         return checkpoint
     return None
 
@@ -276,9 +386,7 @@ def run(
 
     wrapped_env = SrbFpoEnvWrapper(
         env,
-        actor_keys=obs_cfg.get(
-            "actor_keys", ["state", "proprio", "command"]
-        ),
+        actor_keys=obs_cfg.get("actor_keys", ["proprio", "proprio_dyn", "command"]),
         critic_keys=obs_cfg.get("critic_keys"),
         clip_actions=raw_cfg.get("clip_actions", 1.0),
     )
@@ -310,6 +418,7 @@ def run(
     )
     runner.add_git_repo_to_log(__file__)
     _install_action_consistency(runner, cfg.clip_actions)
+    _install_environment_step_logging(runner)
 
     if from_checkpoint:
         runner.load(
@@ -332,4 +441,3 @@ def run(
         while sim_app.is_running():
             actions = policy(observations)
             observations, _, _, _ = wrapped_env.step(actions)
-

@@ -13,12 +13,13 @@ log_interval: 1
 eval_steps: 0
 empirical_normalization: true
 observation_clip: 10.0
-randomize_reset_episode_progress: true
+# Keep episode-duration success metrics comparable across algorithms.
+randomize_reset_episode_progress: false
 validate: true
 
 # SRB observation mapping. A null critic_keys value reuses the actor input.
 obs:
-  actor_keys: [state, proprio, proprio_dyn, command]
+  actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
 
 smoothing:

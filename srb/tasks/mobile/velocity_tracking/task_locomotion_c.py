@@ -1,6 +1,7 @@
+from collections.abc import Sequence
 from dataclasses import MISSING
-from math import isfinite
-from typing import List, Literal, Sequence
+from math import ceil, isfinite
+from typing import Literal
 
 import torch
 
@@ -83,6 +84,9 @@ class LocomotionTerminationCfg:
     tracking_linear_error_threshold: float = 0.25
     tracking_angular_error_threshold: float = 0.25
     tracking_min_body_up_z: float = 0.8
+    success_min_duration_s: float = 30.0
+    success_settle_time_s: float = 1.0
+    success_tracking_fraction: float = 0.9
 
 
 @configclass
@@ -284,7 +288,7 @@ class LocomotionTaskCfg(TaskCfg):
     env_rate: float = 1.0 / 125.0
 
     ## Visualization
-    command_vis: bool = True  
+    command_vis: bool = True
 
     def __post_init__(self):
         super().__post_init__()
@@ -294,9 +298,7 @@ class LocomotionTaskCfg(TaskCfg):
         # Sensor: Robot contacts
         self.scene.contacts_robot.prim_path = f"{self.scene.robot.prim_path}/.*"
 
-        initial_stage = (
-            0 if self.curriculum.enabled else self.curriculum.fixed_stage
-        )
+        initial_stage = 0 if self.curriculum.enabled else self.curriculum.fixed_stage
         self.events.command.interval_range_s = self.curriculum.command_interval_ranges[
             initial_stage
         ]
@@ -367,13 +369,11 @@ class LocomotionTaskCfg(TaskCfg):
         ):
             raise ValueError("stage_env_steps must be strictly increasing.")
         if any(
-            magnitude < 0.0
-            for magnitude in self.curriculum.linear_velocity_magnitudes
+            magnitude < 0.0 for magnitude in self.curriculum.linear_velocity_magnitudes
         ):
             raise ValueError("linear_velocity_magnitudes must be non-negative.")
         if any(
-            magnitude < 0.0
-            for magnitude in self.curriculum.angular_velocity_magnitudes
+            magnitude < 0.0 for magnitude in self.curriculum.angular_velocity_magnitudes
         ):
             raise ValueError("angular_velocity_magnitudes must be non-negative.")
         if any(
@@ -389,13 +389,23 @@ class LocomotionTaskCfg(TaskCfg):
                 "Each command_interval_range must be positive and ordered as "
                 "(min, max)."
             )
+        if (
+            not isfinite(float(self.terminations.success_min_duration_s))
+            or self.terminations.success_min_duration_s < 0.0
+        ):
+            raise ValueError("success_min_duration_s must be finite and non-negative.")
+        if (
+            not isfinite(float(self.terminations.success_settle_time_s))
+            or self.terminations.success_settle_time_s < 0.0
+        ):
+            raise ValueError("success_settle_time_s must be finite and non-negative.")
+        if not 0.0 <= self.terminations.success_tracking_fraction <= 1.0:
+            raise ValueError("success_tracking_fraction must be in [0, 1].")
         if self.include_gravity_magnitude and (
             not isfinite(float(self.gravity_magnitude_reference))
             or self.gravity_magnitude_reference <= 0.0
         ):
-            raise ValueError(
-                "gravity_magnitude_reference must be finite and positive."
-            )
+            raise ValueError("gravity_magnitude_reference must be finite and positive.")
 
 
 ############
@@ -427,6 +437,36 @@ class LocomotionTask(Task):
         self._gravity_magnitude = gravity_buffer
         self._gravity_magnitude_scalar = float(gravity_buffer[0].item())
 
+        # These buffers are deliberately separate from Isaac Lab's episode
+        # progress buffer.  Some runners randomize that buffer at startup, so
+        # it cannot be used to decide whether an episode was long enough for
+        # the task-level success criterion.
+        self._success_episode_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_valid_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_tracking_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_had_termination = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._success_grace_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_last_command = torch.zeros(
+            self.num_envs, 3, dtype=torch.float32, device=self.device
+        )
+        self._success_last_accounted_step = -1
+        self._success_min_steps = ceil(
+            self.cfg.terminations.success_min_duration_s / max(self.step_dt, 1.0e-6)
+        )
+        self._success_settle_steps = ceil(
+            self.cfg.terminations.success_settle_time_s / max(self.step_dt, 1.0e-6)
+        )
+
         ## Get scene assets
         self._contacts_robot: ContactSensor = self.scene["contacts_robot"]
 
@@ -444,6 +484,8 @@ class LocomotionTask(Task):
             idx for idx in all_body_indices if idx not in self._feet_indices
         ]
         self._resample_commands(torch.arange(self.num_envs, device=self.device))
+        self._success_last_command.copy_(self._command)
+        self._success_grace_steps.fill_(self._success_settle_steps)
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
@@ -451,6 +493,89 @@ class LocomotionTask(Task):
         # The base constructor may reset before Task initializes _command.
         if hasattr(self, "_command"):
             self._resample_commands(env_ids)
+        if hasattr(self, "_success_episode_steps"):
+            ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+            self._success_episode_steps[ids] = 0
+            self._success_valid_steps[ids] = 0
+            self._success_tracking_steps[ids] = 0
+            self._success_had_termination[ids] = False
+            self._success_grace_steps[ids] = self._success_settle_steps
+            self._success_last_command[ids] = self._command[ids]
+
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update episode-level locomotion success before automatic reset."""
+
+        terminated, truncated = super()._get_dones()
+        if not hasattr(self, "_success_episode_steps"):
+            return terminated, truncated
+
+        # DirectEnv may reuse the cached step return for rewards and
+        # observations, so account for each simulator decision step here.
+        current_step = int(self.common_step_counter)
+        if current_step == self._success_last_accounted_step:
+            return terminated, truncated
+        self._success_last_accounted_step = current_step
+
+        command_changed = torch.any(
+            torch.abs(self._command - self._success_last_command) > 1.0e-6,
+            dim=1,
+        )
+        self._success_grace_steps[command_changed] = self._success_settle_steps
+        self._success_last_command.copy_(self._command)
+
+        grace_active = self._success_grace_steps > 0
+        self._success_grace_steps.sub_(grace_active.to(dtype=torch.long))
+        valid_step = ~grace_active
+
+        self._success_episode_steps += 1
+        self._success_valid_steps += valid_step.to(dtype=torch.long)
+
+        tracking_success = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        if self._step_return.info is not None:
+            raw_tracking_success = self._step_return.info.get(
+                "metrics/tracking_success"
+            )
+            if raw_tracking_success is not None:
+                tracking_success = raw_tracking_success.to(dtype=torch.bool)
+        self._success_tracking_steps += (valid_step & tracking_success).to(
+            dtype=torch.long
+        )
+        self._success_had_termination |= terminated
+
+        completed = terminated | truncated
+        valid_steps = self._success_valid_steps.clamp_min(1)
+        tracking_fraction = self._success_tracking_steps.to(torch.float32) / valid_steps
+        success = (
+            completed
+            & truncated
+            & ~terminated
+            & (self._success_episode_steps >= self._success_min_steps)
+            & (self._success_valid_steps > 0)
+            & ~self._success_had_termination
+            & (tracking_fraction >= self.cfg.terminations.success_tracking_fraction)
+        )
+        failed = completed & ~success
+
+        # These are event counters, not per-step success rates.  Integration
+        # loggers can sum them over a window and form a weighted episode rate.
+        self.extras.update(
+            {
+                "metrics/episode_completed": completed.to(torch.float32),
+                "metrics/episode_success": success.to(torch.float32),
+                "metrics/episode_failed": failed.to(torch.float32),
+                "metrics/episode_tracking_fraction": torch.where(
+                    completed, tracking_fraction, torch.zeros_like(tracking_fraction)
+                ),
+                "metrics/episode_duration_s": torch.where(
+                    completed,
+                    self._success_episode_steps.to(torch.float32) * self.step_dt,
+                    torch.zeros(self.num_envs, device=self.device),
+                ),
+            }
+        )
+        return terminated, truncated
 
     def _resample_commands(self, env_ids: Sequence[int] | torch.Tensor):
         if isinstance(env_ids, torch.Tensor):
@@ -671,15 +796,18 @@ class LocomotionTask(Task):
             stage_env_steps=self.cfg.curriculum.stage_env_steps,
         )
         if self._undesired_contact_body_indices:
-            undesired_contact = torch.max(
-                torch.norm(
-                    contact_forces_robot[
-                        :, self._undesired_contact_body_indices, :
-                    ],
-                    dim=-1,
-                ),
-                dim=1,
-            )[0] > self.cfg.rewards.undesired_contact_force_threshold
+            undesired_contact = (
+                torch.max(
+                    torch.norm(
+                        contact_forces_robot[
+                            :, self._undesired_contact_body_indices, :
+                        ],
+                        dim=-1,
+                    ),
+                    dim=1,
+                )[0]
+                > self.cfg.rewards.undesired_contact_force_threshold
+            )
         else:
             undesired_contact = torch.zeros(
                 self.num_envs,
@@ -743,8 +871,8 @@ def _compute_step_return(
     imu_lin_acc: torch.Tensor,
     imu_ang_vel: torch.Tensor,
     ## Robot descriptors
-    robot_feet_indices: List[int],
-    robot_undesired_contact_body_indices: List[int],
+    robot_feet_indices: list[int],
+    robot_undesired_contact_body_indices: list[int],
     ## Command
     command: torch.Tensor,
     ## Rewards
@@ -824,9 +952,7 @@ def _compute_step_return(
     if len(robot_undesired_contact_body_indices) > 0:
         undesired_contact_force = torch.max(
             torch.norm(
-                contact_forces_robot[
-                    :, robot_undesired_contact_body_indices, :
-                ],
+                contact_forces_robot[:, robot_undesired_contact_body_indices, :],
                 dim=-1,
             ),
             dim=1,
@@ -840,8 +966,7 @@ def _compute_step_return(
         / command_linear_exp_std
     )
     reward_cmd_ang_vel_z = command_angular_weight * torch.exp(
-        -torch.square(command[:, 2] - vel_ang_robot[:, 2])
-        / command_angular_exp_std
+        -torch.square(command[:, 2] - vel_ang_robot[:, 2]) / command_angular_exp_std
     )
 
     moving_command = torch.norm(command[:, :2], dim=1) > moving_command_threshold
@@ -868,8 +993,7 @@ def _compute_step_return(
         dim=-1,
     )
     penalty_foot_slip = torch.clamp_min(
-        foot_slip_weight
-        * torch.sum(feet_in_contact * foot_slip_speed, dim=1),
+        foot_slip_weight * torch.sum(feet_in_contact * foot_slip_speed, dim=1),
         min=foot_slip_max_penalty,
     )
 
@@ -911,8 +1035,8 @@ def _compute_step_return(
                 "contact_forces_robot": contact_forces_robot,
             },
             "proprio": {
-                "vel_lin_robot": vel_lin_robot,
-                "vel_ang_robot": vel_ang_robot,
+                # "vel_lin_robot": vel_lin_robot,
+                # "vel_ang_robot": vel_ang_robot,
                 "projected_gravity_robot": projected_gravity_robot,
                 "imu_lin_acc": imu_lin_acc,
                 "imu_ang_vel": imu_ang_vel,
@@ -920,8 +1044,8 @@ def _compute_step_return(
             "proprio_dyn": {
                 "joint_pos_robot_normalized": joint_pos_robot_normalized,
                 "joint_vel_robot": joint_vel_robot,
-                "joint_acc_robot": joint_acc_robot,
-                "joint_applied_torque_robot": joint_applied_torque_robot,
+                # "joint_acc_robot": joint_acc_robot,
+                # "joint_applied_torque_robot": joint_applied_torque_robot,
                 "act_previous": act_previous,
             },
             "command": {

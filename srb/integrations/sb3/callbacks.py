@@ -22,6 +22,7 @@ class RewardTermsTensorboardCallback(BaseCallback):
 
         reward_terms_by_name: dict[str, list[float]] = {}
         task_metrics_by_name: dict[str, list[float]] = {}
+        episode_events: dict[str, float] = {}
         for info in infos:
             if not isinstance(info, dict):
                 continue
@@ -36,11 +37,16 @@ class RewardTermsTensorboardCallback(BaseCallback):
             for name, value in info.items():
                 if isinstance(name, str) and name.startswith("metrics/"):
                     metric_name = name.removeprefix("metrics/")
+                    if metric_name.startswith("episode_"):
+                        episode_events[metric_name] = episode_events.get(
+                            metric_name, 0.0
+                        ) + sum(self._to_float_list(value))
+                        continue
                     task_metrics_by_name.setdefault(metric_name, []).extend(
                         self._to_float_list(value)
                     )
 
-        if not reward_terms_by_name and not task_metrics_by_name:
+        if not reward_terms_by_name and not task_metrics_by_name and not episode_events:
             return True
 
         for reward_term, reward_term_values in sorted(reward_terms_by_name.items()):
@@ -100,6 +106,36 @@ class RewardTermsTensorboardCallback(BaseCallback):
                 mean_metric,
                 exclude="tensorboard" if self._tensorboard_writer is not None else None,
             )
+
+        completed = episode_events.get("episode_completed", 0.0)
+        if completed > 0.0:
+            success_rate = episode_events.get("episode_success", 0.0) / completed
+            failure_rate = episode_events.get("episode_failed", 0.0) / completed
+            for name, value in (
+                ("rollout/episode_success_rate", success_rate),
+                ("rollout/episode_failure_rate", failure_rate),
+                (
+                    "rollout/episode_tracking_fraction",
+                    episode_events.get("episode_tracking_fraction", 0.0) / completed,
+                ),
+                (
+                    "rollout/episode_duration_s",
+                    episode_events.get("episode_duration_s", 0.0) / completed,
+                ),
+            ):
+                if self._tensorboard_writer is not None:
+                    self._tensorboard_writer.add_scalar(
+                        name,
+                        value,
+                        self.num_timesteps,
+                    )
+                self.logger.record_mean(
+                    name,
+                    value,
+                    exclude="tensorboard"
+                    if self._tensorboard_writer is not None
+                    else None,
+                )
 
         return True
 

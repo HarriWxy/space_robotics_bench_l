@@ -10,7 +10,7 @@ from rl_zoo3 import ALGOS
 from stable_baselines3.common.callbacks import tqdm
 
 from srb.integrations.sb3.exp_manager import ExperimentManager
-from srb.integrations.sb3.wrapper import Sb3EnvWrapper
+from srb.integrations.sb3.wrapper import Sb3EnvWrapper, SelectDictObsWrapper
 from srb.utils import logging
 from srb.utils.cfg import last_file, stamp_dir
 from srb.wrappers import maybe_wrap_action_smoothing
@@ -33,7 +33,6 @@ def run(
     logdir: Path,
     model: Path,
     continue_training: bool | None = None,
-    untrained: bool = False,
     **kwargs,
 ):
     ## Extract params from agent_cfg
@@ -57,17 +56,15 @@ def run(
 
     # Pop the entire smoothing config dictionary to be handled separately.
     smoothing_cfg = agent_cfg.pop("smoothing", {})
-
-    if untrained and model:
-        raise ValueError("--untrained cannot be combined with --model")
+    observation_keys = agent_cfg.pop("observation_keys", None)
 
     # Determine checkpoint path
     if model:
         from_checkpoint = model
-    elif (workflow == "eval" and not untrained) or continue_training:
+    elif workflow == "eval" or continue_training:
         from_checkpoint = last_file(logdir.joinpath("ckpt"), modification_time=True)
     else:
-        from_checkpoint = None
+        from_checkpoint = ""
     if from_checkpoint:
         logging.info(f"Loading model from {from_checkpoint}")
 
@@ -93,6 +90,12 @@ def run(
         smoothing_cfg,
     )
 
+    # SB3's MultiInputPolicy consumes every entry in a Dict observation. Apply
+    # the optional filter before converting the Isaac Lab vector environment to
+    # an SB3 VecEnv so that the policy and observation space stay consistent.
+    if observation_keys is not None:
+        env = SelectDictObsWrapper(env, observation_keys=observation_keys)  # type: ignore
+
     # Wrap the environment
     env = Sb3EnvWrapper(env)  # type: ignore
 
@@ -109,7 +112,7 @@ def run(
         hyperparams=agent_cfg,
         trained_agent=from_checkpoint.as_posix()
         if isinstance(from_checkpoint, Path)
-        else from_checkpoint or "",
+        else from_checkpoint,
         optimize_hyperparameters=workflow == "optimize",
         n_trials=n_trials,
         sampler=sampler,
@@ -151,21 +154,11 @@ def run(
             if "HerReplayBuffer" in agent_cfg.get("replay_buffer_class", ""):
                 agent_cfg["env"] = env
 
-            if untrained:
-                setup_result = exp_manager.setup_experiment()  # type: ignore
-                if setup_result is None:
-                    raise RuntimeError("Could not initialize the untrained agent")
-                agent, _saved_hyperparams = setup_result
-            else:
-                if from_checkpoint is None:
-                    raise FileNotFoundError(
-                        f"No checkpoint found in {logdir.joinpath('ckpt')}. "
-                        "Pass --model or use --untrained."
-                    )
-                agent = ALGOS[algo].load(
-                    from_checkpoint.as_posix(),
-                    device=env.unwrapped.device,  # type: ignore
-                )
+            # Load the agent
+            agent = ALGOS[algo].load(
+                from_checkpoint.as_posix(),
+                device=env.unwrapped.device,  # type: ignore
+            )
 
             # Initialize the runner
             episode_start = numpy.ones(

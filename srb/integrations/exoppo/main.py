@@ -6,11 +6,11 @@ import json
 import random
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import gymnasium
 import numpy as np
@@ -225,6 +225,20 @@ def _write_run_manifest(
                 "stage_env_steps",
             )
             if hasattr(curriculum, name)
+        }
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is not None:
+        environment["terminations"] = {
+            name: _jsonable(getattr(terminations, name))
+            for name in (
+                "tracking_linear_error_threshold",
+                "tracking_angular_error_threshold",
+                "tracking_min_body_up_z",
+                "success_min_duration_s",
+                "success_settle_time_s",
+                "success_tracking_fraction",
+            )
+            if hasattr(terminations, name)
         }
     sim_cfg = getattr(env_cfg, "sim", None)
     if sim_cfg is not None:
@@ -461,6 +475,7 @@ def _collect_rollout(
     reward_term_counts: dict[str, int] = {}
     task_metric_sums: dict[str, torch.Tensor] = {}
     task_metric_counts: dict[str, int] = {}
+    episode_event_sums: dict[str, torch.Tensor] = {}
 
     trainer.policy.eval()
     trainer.value.eval()
@@ -514,10 +529,24 @@ def _collect_rollout(
                     )
 
             for name, metric in _iter_task_metrics(extras):
+                metric_name = name.removeprefix("metrics/")
+                if metric_name.startswith("episode_"):
+                    event_values = torch.as_tensor(
+                        metric, dtype=torch.float32, device=trainer.device
+                    ).reshape(-1)
+                    event_values = event_values[torch.isfinite(event_values)]
+                    if event_values.numel() > 0:
+                        episode_event_sums[metric_name] = (
+                            episode_event_sums.get(
+                                metric_name, torch.zeros((), device=trainer.device)
+                            )
+                            + event_values.sum()
+                        )
+                    continue
                 _accumulate_scalar_batch(
                     task_metric_sums,
                     task_metric_counts,
-                    name.removeprefix("metrics/"),
+                    metric_name,
                     metric,
                     device=trainer.device,
                 )
@@ -619,6 +648,25 @@ def _collect_rollout(
     for name, metric_sum in task_metric_sums.items():
         metric_count = task_metric_counts[name]
         metrics[f"rollout/metrics/{name}"] = float(metric_sum.cpu()) / metric_count
+    event_zero = torch.zeros((), device=trainer.device)
+    completed = float(episode_event_sums.get("episode_completed", event_zero).cpu())
+    if completed > 0.0:
+        metrics["rollout/episode_success_rate"] = (
+            float(episode_event_sums.get("episode_success", event_zero).cpu())
+            / completed
+        )
+        metrics["rollout/episode_failure_rate"] = (
+            float(episode_event_sums.get("episode_failed", event_zero).cpu())
+            / completed
+        )
+        metrics["rollout/episode_tracking_fraction"] = (
+            float(episode_event_sums.get("episode_tracking_fraction", event_zero).cpu())
+            / completed
+        )
+        metrics["rollout/episode_duration_s"] = (
+            float(episode_event_sums.get("episode_duration_s", event_zero).cpu())
+            / completed
+        )
     return rollout, actor_observation, critic_observation, metrics, step_count
 
 
@@ -1009,6 +1057,7 @@ def _evaluate(
     step_reward_sum = torch.zeros((), device=wrapped_env.device)
     task_metric_sums: dict[str, torch.Tensor] = {}
     task_metric_counts: dict[str, int] = {}
+    episode_event_sums: dict[str, torch.Tensor] = {}
     try:
         with torch.inference_mode():
             while sim_app.is_running() and (eval_steps == 0 or step < eval_steps):
@@ -1036,10 +1085,25 @@ def _evaluate(
                     update=False,
                 )
                 for name, metric in _iter_task_metrics(extras):
+                    metric_name = name.removeprefix("metrics/")
+                    if metric_name.startswith("episode_"):
+                        values = torch.as_tensor(
+                            metric, dtype=torch.float32, device=wrapped_env.device
+                        ).reshape(-1)
+                        values = values[torch.isfinite(values)]
+                        if values.numel() > 0:
+                            episode_event_sums[metric_name] = (
+                                episode_event_sums.get(
+                                    metric_name,
+                                    torch.zeros((), device=wrapped_env.device),
+                                )
+                                + values.sum()
+                            )
+                        continue
                     _accumulate_scalar_batch(
                         task_metric_sums,
                         task_metric_counts,
-                        name.removeprefix("metrics/"),
+                        metric_name,
                         metric,
                         device=wrapped_env.device,
                     )
@@ -1076,6 +1140,27 @@ def _evaluate(
             for name, metric_sum in task_metric_sums.items():
                 metric_count = task_metric_counts[name]
                 metrics[f"eval/metrics/{name}"] = float(metric_sum.cpu()) / metric_count
+            event_zero = torch.zeros((), device=wrapped_env.device)
+            completed_events = float(
+                episode_event_sums.get("episode_completed", event_zero).cpu()
+            )
+            if completed_events > 0.0:
+                metrics["eval/episode_success_rate"] = (
+                    float(episode_event_sums.get("episode_success", event_zero).cpu())
+                    / completed_events
+                )
+                metrics["eval/episode_failure_rate"] = (
+                    float(episode_event_sums.get("episode_failed", event_zero).cpu())
+                    / completed_events
+                )
+                metrics["eval/episode_tracking_fraction"] = (
+                    float(
+                        episode_event_sums.get(
+                            "episode_tracking_fraction", event_zero
+                        ).cpu()
+                    )
+                    / completed_events
+                )
             write_scalars(writer, metrics, step * wrapped_env.num_envs)
             writer.flush()
             writer.close()
@@ -1183,18 +1268,19 @@ def run(
             device=wrapped_env.device,
         )
         algorithm_name = "ExO-PPO"
-    _write_run_manifest(
-        logdir=Path(logdir),
-        workflow=workflow,
-        algorithm=algorithm_name,
-        env_id=env_id,
-        env_cfg=env_cfg,
-        raw_cfg=raw_cfg,
-        flow_config=flow_config,
-        wrapped_env=wrapped_env,
-        actor_observation_dim=int(initial_actor.shape[1]),
-        critic_observation_dim=int(initial_critic.shape[1]),
-    )
+    if workflow == "train":
+        _write_run_manifest(
+            logdir=Path(logdir),
+            workflow=workflow,
+            algorithm=algorithm_name,
+            env_id=env_id,
+            env_cfg=env_cfg,
+            raw_cfg=raw_cfg,
+            flow_config=flow_config,
+            wrapped_env=wrapped_env,
+            actor_observation_dim=int(initial_actor.shape[1]),
+            critic_observation_dim=int(initial_critic.shape[1]),
+        )
     checkpoint = _resolve_checkpoint(
         workflow=workflow,
         logdir=Path(logdir),

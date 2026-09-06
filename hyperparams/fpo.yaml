@@ -1,10 +1,11 @@
 # seed: 42
+# 6104 * 64 * 256 = 100,007,936 environment transitions.
 num_steps_per_env: 64
-max_iterations: 5000
+max_iterations: 6104
 empirical_normalization: true
 randomize_reset_episode_progress: 0.0
 clip_actions: 1.0
-save_interval: 1000
+save_interval: 2500
 experiment_name: srb_fpo
 run_name: ""
 logger: tensorboard
@@ -20,7 +21,7 @@ load_run: ".*"
 load_checkpoint: "model_.*.pt"
 
 obs:
-  actor_keys: [state, proprio, command]
+  actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
 
 policy:
@@ -47,7 +48,8 @@ algorithm:
   weight_decay: 1.0e-4
   adam_betas: [0.9, 0.999]
   schedule: fixed
-  gamma: 0.99
+  # Match PPO/SAC/ExO's effective 25 Hz horizon for the main comparison.
+  gamma: 0.997
   lam: 0.95
   knn_entropy_coef: 0.0
   knn_entropy_k: 1
@@ -68,4 +70,3 @@ algorithm:
   storage_action_noise_std: 0.0
   ema_decay: 0.95
   ema_warmup_steps: 500
-

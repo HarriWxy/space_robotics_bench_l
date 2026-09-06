@@ -174,9 +174,7 @@ def run_agent_with_env(
             logdir = _new_parent
         kwargs["model"] = model
     elif (agent_subcommand == "train" and kwargs["continue_training"]) or (
-        agent_subcommand in ("eval", "teleop")
-        and kwargs["algo"]
-        and not kwargs.get("untrained", False)
+        agent_subcommand in ("eval", "teleop") and kwargs["algo"]
     ):
         logdir = last_logdir(env_id=env_id, workflow=workflow, root=logdir_root)
     else:
@@ -2450,13 +2448,6 @@ def parse_cli_args() -> argparse.Namespace:
                 "--model",
                 type=str,
                 help="Path to the model checkpoint",
-            )
-        if _parser is eval_agent_parser:
-            algorithm_group.add_argument(
-                "--untrained",
-                help="Evaluate a freshly initialized, untrained policy",
-                action="store_true",
-                default=False,
             )
 
     ## Train args

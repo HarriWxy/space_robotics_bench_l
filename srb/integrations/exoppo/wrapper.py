@@ -140,7 +140,7 @@ class SrbExoPpoEnvWrapper:
         else:
             inferred_keys = tuple(
                 key
-                for key in ("state", "proprio", "proprio_dyn", "command")
+                for key in ("proprio", "proprio_dyn", "command")
                 if key in observations
             )
             if not inferred_keys:

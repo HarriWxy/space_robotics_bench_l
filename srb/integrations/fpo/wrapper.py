@@ -138,7 +138,7 @@ class SrbFpoEnvWrapper:
                 # that do not expose it.
                 default_keys = tuple(
                     key
-                    for key in ("state", "proprio", "command")
+                    for key in ("proprio", "proprio_dyn", "command")
                     if key in observations
                 )
                 if not default_keys:
@@ -150,9 +150,7 @@ class SrbFpoEnvWrapper:
                     observations, default_keys, name="actor"
                 )
         else:
-            actor = self._concat_categories(
-                observations, self.actor_keys, name="actor"
-            )
+            actor = self._concat_categories(observations, self.actor_keys, name="actor")
 
         critic = None
         if self.critic_keys is not None:
@@ -174,7 +172,9 @@ class SrbFpoEnvWrapper:
         if self.validate and not self._validated:
             tensors = [actor] + ([critic] if critic is not None else [])
             if any(not torch.isfinite(tensor).all().item() for tensor in tensors):
-                raise FloatingPointError("Non-finite observation reached the FPO adapter")
+                raise FloatingPointError(
+                    "Non-finite observation reached the FPO adapter"
+                )
             self._validated = True
 
         return actor, critic
@@ -204,15 +204,41 @@ class SrbFpoEnvWrapper:
         extras = dict(info) if isinstance(info, Mapping) else {}
         observation_extras = extras.get("observations", {})
         observation_extras = (
-            dict(observation_extras)
-            if isinstance(observation_extras, Mapping)
-            else {}
+            dict(observation_extras) if isinstance(observation_extras, Mapping) else {}
         )
         if critic_observations is None:
             observation_extras.pop("critic", None)
         else:
             observation_extras["critic"] = critic_observations
         extras["observations"] = observation_extras
+
+        # The upstream FPO runner consumes task logging through ``episode`` or
+        # ``log`` rather than the raw SRB info mapping.  Keep the values on the
+        # simulator device here; the runner can aggregate them once per
+        # collection instead of forcing one host transfer per environment.
+        log_container = (
+            "episode" if isinstance(extras.get("episode"), Mapping) else "log"
+        )
+        logs = dict(extras.get(log_container, {}))
+        for key, value in extras.items():
+            if (
+                isinstance(key, str)
+                and key.startswith("metrics/")
+                and key != "metrics/"
+            ):
+                metric = torch.as_tensor(
+                    value, device=self.device, dtype=torch.float32
+                ).detach()
+                logs[f"rollout/{key}"] = metric
+        reward_terms = extras.get("reward_terms")
+        if isinstance(reward_terms, Mapping):
+            for name, value in reward_terms.items():
+                metric = torch.as_tensor(
+                    value, device=self.device, dtype=torch.float32
+                ).detach()
+                logs[f"rollout/reward_terms/{name}"] = metric
+        if logs:
+            extras[log_container] = logs
         return extras
 
     def get_observations(self) -> tuple[torch.Tensor, dict[str, Any]]:
@@ -288,4 +314,3 @@ class SrbFpoEnvWrapper:
 
     def close(self):
         return self.env.close()
-

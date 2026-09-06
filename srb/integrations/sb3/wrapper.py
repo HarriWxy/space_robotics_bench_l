@@ -1,9 +1,11 @@
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import gymnasium
 import numpy
 import torch
+from gymnasium.core import ObservationWrapper, ObsType, WrapperObsType
 from stable_baselines3.common.vec_env.base_vec_env import (
     VecEnv,
     VecEnvObs,
@@ -12,6 +14,65 @@ from stable_baselines3.common.vec_env.base_vec_env import (
 
 if TYPE_CHECKING:
     from srb._typing import AnyEnv
+
+
+class SelectDictObsWrapper(ObservationWrapper):
+    """Select top-level entries from an SRB dictionary observation.
+
+    SRB environments expose a batched ``Dict`` observation with one entry per
+    observation category.  SB3's ``MultiInputPolicy`` consumes every entry in
+    that dictionary, so this wrapper must be applied before :class:`Sb3EnvWrapper`
+    and update the underlying single-environment space as well.
+    """
+
+    def __init__(self, env: "AnyEnv", observation_keys: Sequence[str]):
+        super().__init__(env)
+
+        keys = tuple(observation_keys)
+        if not keys:
+            raise ValueError("observation_keys must contain at least one key")
+        if len(keys) != len(set(keys)):
+            raise ValueError("observation_keys must not contain duplicates")
+
+        single_observation_space = getattr(
+            env.unwrapped, "single_observation_space", None
+        )
+        if not isinstance(single_observation_space, gymnasium.spaces.Dict):
+            raise TypeError(
+                "SelectDictObsWrapper requires a Dict single_observation_space"
+            )
+
+        missing = [key for key in keys if key not in single_observation_space.spaces]
+        if missing:
+            available = ", ".join(single_observation_space.spaces.keys())
+            raise KeyError(
+                f"Unknown observation keys {missing}; available keys: [{available}]"
+            )
+
+        self.observation_keys = keys
+        selected_space = gymnasium.spaces.Dict(
+            {key: single_observation_space.spaces[key] for key in self.observation_keys}
+        )
+
+        # Sb3EnvWrapper resolves the space from ``env.unwrapped``.  Keep both
+        # the single-environment and batched spaces consistent with the
+        # filtered observations returned below.
+        self.unwrapped.single_observation_space = selected_space  # type: ignore
+        self.unwrapped.observation_space = gymnasium.vector.utils.batch_space(
+            selected_space,
+            self.unwrapped.num_envs,  # type: ignore
+        )
+        self._observation_space = selected_space
+
+    def observation(self, observation: ObsType) -> WrapperObsType:
+        """Return only the configured top-level observation categories."""
+
+        if not isinstance(observation, Mapping):
+            raise TypeError(
+                "SelectDictObsWrapper expects a mapping observation, got "
+                f"{type(observation).__name__}"
+            )
+        return {key: observation[key] for key in self.observation_keys}
 
 
 class Sb3EnvWrapper(VecEnv):
@@ -193,7 +254,7 @@ class Sb3EnvWrapper(VecEnv):
         return obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else obs
 
     def _process_obs_dict(
-        self, obs: Dict[str, numpy.ndarray | torch.Tensor]
+        self, obs: dict[str, numpy.ndarray | torch.Tensor]
     ) -> Mapping[str, numpy.ndarray]:
         _first_obs = next(iter(obs.values()))
         if isinstance(_first_obs, torch.Tensor):
@@ -209,11 +270,11 @@ class Sb3EnvWrapper(VecEnv):
         obs: numpy.ndarray,
         terminated: numpy.ndarray,
         truncated: numpy.ndarray,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         reset_ids: numpy.ndarray,
     ) -> Sequence[Mapping[str, Any]]:
         # Create empty list of dictionaries to fill
-        infos: List[Dict[str, Any]] = [
+        infos: list[dict[str, Any]] = [
             dict.fromkeys(extras.keys()) for _ in range(self.num_envs)
         ]
         # Fill-in information for each sub-environment
@@ -244,7 +305,7 @@ class Sb3EnvWrapper(VecEnv):
             # Add information about terminal observation separately
             if idx in reset_ids:
                 # Extract terminal observations
-                if isinstance(obs, Dict):
+                if isinstance(obs, dict):
                     terminal_obs = dict.fromkeys(obs.keys())
                     for key, value in obs.items():
                         terminal_obs[key] = value[idx]
@@ -262,7 +323,7 @@ class Sb3EnvWrapper(VecEnv):
         obs: numpy.ndarray,
         terminated: numpy.ndarray,
         truncated: numpy.ndarray,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         reset_ids: numpy.ndarray,
     ) -> Sequence[Mapping[str, Any]]:
         infos = deepcopy(self._default_infos)
@@ -292,14 +353,43 @@ class Sb3EnvWrapper(VecEnv):
                     idx,
                 )
 
+        metrics = {
+            key: value
+            for key, value in extras.items()
+            if isinstance(key, str) and key.startswith("metrics/") and key != "metrics/"
+        }
+        if metrics:
+            metric_values = self._extract_batch_values(metrics)
+            for metric_idx, key in enumerate(metrics):
+                for env_idx in range(self.num_envs):
+                    infos[env_idx][key] = float(metric_values[metric_idx, env_idx])
+
         return infos
+
+    def _extract_batch_values(self, values: Mapping[str, Any]) -> numpy.ndarray:
+        """Move scalar or per-environment extras to host memory in one batch."""
+
+        columns = []
+        for name, value in values.items():
+            tensor = torch.as_tensor(value, device=self.sim_device).detach().float()
+            tensor = tensor.reshape(-1)
+            if tensor.numel() == 1:
+                tensor = tensor.expand(self.num_envs)
+            elif tensor.numel() != self.num_envs:
+                raise ValueError(
+                    f"SB3 metric {name!r} must be scalar or have one value per "
+                    f"environment, got {tensor.numel()} values for {self.num_envs} "
+                    "environments"
+                )
+            columns.append(tensor)
+        return torch.stack(columns).cpu().numpy()
 
     @staticmethod
     def _extract_reward_terms(
-        reward_terms: Dict[str, Any],
+        reward_terms: dict[str, Any],
         idx: int,
-    ) -> Dict[str, float]:
-        extracted_reward_terms: Dict[str, float] = {}
+    ) -> dict[str, float]:
+        extracted_reward_terms: dict[str, float] = {}
         for reward_term, value in reward_terms.items():
             if isinstance(value, torch.Tensor):
                 extracted_reward_terms[reward_term] = float(
