@@ -63,8 +63,8 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
         default_root_state = articulation_asset.data.default_root_state[env_ids].clone()
         # default_root_pos = articulation_asset.data.default_root_pose[env_ids].clone()
         # default_joint_vel = articulation_asset.data.default_joint_vel[env_ids].clone()
-        
-        default_root_state[:, 0:3] += env.scene.env_origins[env_ids] ## what does this mean?  
+
+        default_root_state[:, 0:3] += env.scene.env_origins[env_ids] ## what does this mean?
         # Set into the physics simulation
         articulation_asset.write_root_pose_to_sim_index(
             root_pose=default_root_state[:, :7],
