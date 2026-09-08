@@ -30,7 +30,7 @@ if __name__ == "__main__":
         "env.curriculum.enabled=false",
         "env.curriculum.fixed_stage=2",
         "env.curriculum.command_mode=forward",
-        "env.curriculum.forward_command=[0.35,0.0,0.0]",
+        "env.curriculum.forward_command=[0.05,0.0,0.0]",
         "env.curriculum.joint_position_ranges=[[0.9,1.1],[0.9,1.1],[0.9,1.1]]",
         "env.episode_length_s=30.0",
         "env.terminations.tracking_linear_error_threshold=0.1",

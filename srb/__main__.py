@@ -894,6 +894,10 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.exoppo import main as exoppo
 
             exoppo.run(workflow=WORKFLOW, objective="ppo", **kwargs)
+        case "exofpo":
+            from srb.integrations.exoppo import exofpo_main as exofpo
+
+            exofpo.run(workflow=WORKFLOW, **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -932,6 +936,10 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.exoppo import main as exoppo
 
             exoppo.run(workflow=WORKFLOW, objective="ppo", **kwargs)
+        case "exofpo":
+            from srb.integrations.exoppo import exofpo_main as exofpo
+
+            exofpo.run(workflow=WORKFLOW, **kwargs)
         case "fpo":
             from srb.integrations.fpo import main as fpo
 
@@ -2638,6 +2646,9 @@ class SupportedAlgo(str, Enum):
 
     # Standard PPO objective using the same interval-flow policy and data path
     FLOWPPO = auto()
+
+    # ExO recent-policy optimization with FPO-style flow matching
+    EXOFPO = auto()
 
     def __str__(self) -> str:
         return self.name.lower()

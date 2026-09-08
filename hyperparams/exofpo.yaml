@@ -1,0 +1,82 @@
+# ExO recent-policy optimization with FPO-style conditional flow matching.
+# The flow actor generates actions by Euler integration from noise (t=1) to
+# actions (t=0); the ExO ratio is computed from per-sample CFM losses.
+seed: 0
+device: null
+# 6104 * 64 rollout steps * 256 environments = 100,007,936 transitions.
+max_iterations: 6104
+rollout_steps: 64
+replay_N: 4
+warmup_rollouts: 4
+update_epochs: 4
+batch_size: 1024
+save_interval: 2500
+log_interval: 1
+eval_steps: 0
+empirical_normalization: true
+observation_clip: 10.0
+randomize_reset_episode_progress: false
+validate: true
+
+obs:
+  actor_keys: [proprio, proprio_dyn, command]
+  critic_keys: null
+
+smoothing:
+  enabled: false
+
+# FPO-compatible conditional velocity field.
+hidden_sizes: [256, 256, 256]
+activation: elu
+actor_scale: 1.0
+mlp_output_scale: 1.0
+actor_final_layer_weight_scale: null
+timestep_embed_dim: 8
+training_sampling_steps: null
+sampling_steps: 8
+cfm_loss_t_inverse_cdf_beta: 1.0
+cfm_loss_reduction: sqrt
+action_perturb_std: 0.02
+n_samples_per_action: 16
+clip_actions: 1.0
+
+# ExO recent-policy smooth CFM ratio.
+gamma: 0.997
+gae_lambda: 0.95
+exo_clip_radius: 0.05
+exo_beta: 5.0
+entropy_coefficient: 0.0
+max_log_ratio: 12.0
+target_kl: 0.0
+
+# Online flow self-distillation. Guidance/dropout are disabled because the
+# actor intentionally matches FPO's unconditional flow-matching architecture.
+ofp_coefficient: 0.1
+flow_mix: 0.8
+consistency_mix: 0.2
+guidance_mix: 0.0
+guidance_scale: 1.0
+condition_dropout: 0.0
+contraction_steps: 50000
+minimum_contraction: 0.05
+ema_initial_decay: 0.75
+ema_max_decay: 0.9999
+ema_ramp_steps: 10000
+
+actor_learning_rate: 1.0e-4
+critic_learning_rate: 2.0e-4
+max_grad_norm: 1.0
+
+# Keep the raw CFM loss for the default ExO-FPO ratio; set to 20.0 only for
+# an exact FPO clamp ablation. Raw/clamped diagnostics are logged either way.
+cfm_diff_clamp_max: 10.0
+cfm_loss_clamp: -1.0
+cfm_loss_clamp_negative_advantages: false
+cfm_loss_clamp_negative_advantages_max: 20.0
+normalize_advantage: true
+advantage_clamp: [100.0, 100.0]
+
+warm_start_time: 0.0
+eval_every_rollouts: 20
+eval_episodes: 5
+stochastic_eval: false

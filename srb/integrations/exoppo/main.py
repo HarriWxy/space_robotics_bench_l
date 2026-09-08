@@ -40,6 +40,7 @@ _RUNNER_KEYS = {
     "obs",
     "smoothing",
     "validate",
+    "clip_actions",
 }
 
 
@@ -193,6 +194,7 @@ def _write_run_manifest(
     wrapped_env: SrbExoPpoEnvWrapper,
     actor_observation_dim: int,
     critic_observation_dim: int,
+    framework: str = FRAMEWORK_NAME,
 ) -> None:
     """Persist the resolved experiment contract next to TensorBoard events."""
 
@@ -251,7 +253,7 @@ def _write_run_manifest(
     replay_steps = int(flow_config.replay_N) * int(flow_config.rollout_steps)
     replay_steps *= int(wrapped_env.num_envs)
     manifest = {
-        "framework": FRAMEWORK_NAME,
+        "framework": framework,
         "algorithm": algorithm,
         "workflow": workflow,
         "env_id": env_id,
@@ -680,7 +682,11 @@ def _checkpoint_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "format_version": 1,
-        "algorithm": "ExO-PPO" if hasattr(trainer, "recent_policy") else "Flow-PPO",
+        "algorithm": getattr(
+            trainer,
+            "algorithm_name",
+            "ExO-PPO" if hasattr(trainer, "recent_policy") else "Flow-PPO",
+        ),
         "policy": trainer.policy.state_dict(),
         "value": trainer.value.state_dict(),
         "actor_optimizer": trainer.actor_optimizer.state_dict(),
