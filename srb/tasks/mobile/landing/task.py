@@ -11,8 +11,10 @@ from srb.core.domain import Domain
 from srb.core.env import OrbitalEnv, OrbitalEnvCfg, OrbitalEventCfg, OrbitalSceneCfg
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers, VisualizationMarkersCfg
-from srb.core.mdp import push_by_setting_velocity  # noqa: F401
-from srb.core.mdp import reset_root_state_uniform
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_root_state_uniform,
+)
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.core.sim import PreviewSurfaceCfg, SphereCfg
 from srb.utils.cfg import configclass
@@ -99,7 +101,7 @@ class TaskCfg(OrbitalEnvCfg):
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tf_quat_target: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     target_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/target",
         markers={
@@ -170,19 +172,19 @@ class Task(OrbitalEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_pos_robot=self._robot.data.root_pos_w,
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
-            projected_gravity_robot=self._robot.data.projected_gravity_b,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
+            projected_gravity_robot=self._robot.data.projected_gravity_b.torch,
             # Transforms (world frame)
             tf_pos_target=self._tf_pos_target,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             # Fuel
             remaining_fuel=remaining_fuel,
         )

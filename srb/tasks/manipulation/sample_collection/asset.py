@@ -1,15 +1,17 @@
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Literal, Tuple
 
 import torch
+from isaaclab.assets import Articulation, DeformableObject, RigidObject
 from pydantic import BaseModel
+from pxr import Usd
 from simforge import TexResConfig
 
 from srb import assets
-from srb.core.asset import AssetVariant, Object, RigidObjectCfg
+from srb.core.asset import AssetBaseCfg, AssetVariant, Object, RigidObjectCfg
 from srb.core.domain import Domain
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import reset_root_state_uniform
-from srb.core.sim import SimforgeAssetCfg
+from srb.core.sim import SimforgeAssetCfg, SpawnerCfg
 
 if TYPE_CHECKING:
     from .task import TaskCfg
@@ -18,6 +20,20 @@ if TYPE_CHECKING:
 class SampleCfg(BaseModel, arbitrary_types_allowed=True):
     asset_cfg: RigidObjectCfg
     state_randomizer: EventTermCfg
+
+
+# Resolve forward references in RigidObjectCfg (which uses `from __future__ import annotations`)
+SampleCfg.model_rebuild(
+    _types_namespace={
+        "Articulation": Articulation,
+        "DeformableObject": DeformableObject,
+        "RigidObject": RigidObject,
+        "SpawnerCfg": SpawnerCfg,
+        "Usd": Usd,
+        "Literal": Literal,
+        "InitialStateCfg": AssetBaseCfg.InitialStateCfg,
+    }
+)
 
 
 def select_sample(

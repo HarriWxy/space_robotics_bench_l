@@ -2,11 +2,11 @@ import math
 from itertools import count
 from typing import TYPE_CHECKING, List, Sequence, Tuple
 
-import isaacsim.core.utils.stage as stage_utils
 import numpy
 import omni.kit.commands
 import omni.timeline
 from isaaclab.sim import clone
+from isaaclab.sim.utils import stage as stage_utils
 from omni.physx.scripts import particleUtils as particle_utils
 from omni.physx.scripts import physicsUtils as physics_utils
 from pxr import Gf, Sdf, Usd, UsdGeom, Vt

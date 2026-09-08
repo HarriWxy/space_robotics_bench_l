@@ -1,13 +1,12 @@
-from srb.core.action import (
-    ActionGroup,
-    BinaryJointPositionActionCfg,
-    JointPositionBinaryActionGroup,
-)
+from srb.core.action import JointPositionToLimitsActionCfg
+from srb.core.action.action_group import ActionGroup
+from srb.core.action.group.common import JointPositionBoundedActionGroup
 from srb.core.actuator import ImplicitActuatorCfg
 from srb.core.asset import ActiveTool, ArticulationCfg, Frame, Transform
 from srb.core.sim import (
     ArticulationRootPropertiesCfg,
     CollisionPropertiesCfg,
+    MeshCollisionPropertiesCfg,
     RigidBodyPropertiesCfg,
     UsdFileCfg,
 )
@@ -20,6 +19,7 @@ class RobotiqHandE(ActiveTool):
     asset_cfg: ArticulationCfg = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/robotiq_hand_e",
         spawn=UsdFileCfg(
+            make_uninstanceable=True,
             usd_path=SRB_ASSETS_DIR_SRB_ROBOT.joinpath("gripper")
             .joinpath("robotiq_hand_e.usdz")
             .as_posix(),
@@ -36,6 +36,7 @@ class RobotiqHandE(ActiveTool):
                 solver_position_iteration_count=8,
                 solver_velocity_iteration_count=0,
             ),
+            mesh_collision_props=MeshCollisionPropertiesCfg(mesh_approximation="convexDecomposition"),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={
@@ -45,8 +46,8 @@ class RobotiqHandE(ActiveTool):
         actuators={
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["Slider_[1-2]"],
-                velocity_limit=4.0,
-                effort_limit=20.0,
+                joint_velocity_limit=4.0,
+                joint_effort_limit=20.0,
                 stiffness=400.0,
                 damping=50.0,
             ),
@@ -54,12 +55,12 @@ class RobotiqHandE(ActiveTool):
     )
 
     ## Actions
-    actions: ActionGroup = JointPositionBinaryActionGroup(
-        BinaryJointPositionActionCfg(
+    actions: ActionGroup = JointPositionBoundedActionGroup(
+        JointPositionToLimitsActionCfg(
             asset_name="robot",
             joint_names=["Slider_[1-2]"],
-            close_command_expr={"Slider_[1-2]": -0.025},
-            open_command_expr={"Slider_[1-2]": 0.0},
+            scale=1.0,
+            rescale_to_limits=True,
         ),
     )
 

@@ -6,6 +6,7 @@ from os import environ
 from typing import Any, Dict, Iterable, Literal, Mapping, Sequence, get_type_hints
 
 import torch
+from isaaclab_visualizers.kit import KitVisualizerCfg
 from simforge import BakeType
 
 from srb import assets
@@ -44,7 +45,6 @@ from srb.core.sim import (
     ParticlesSpawnerCfg,
     PhysxCfg,
     PyramidParticlesSpawnerCfg,
-    RenderCfg,
     RigidBodyMaterialCfg,
     SimforgeAssetCfg,
     SimulationCfg,
@@ -101,12 +101,13 @@ class BaseEnvCfg:
         dt=MISSING,  # type: ignore
         render_interval=MISSING,  # type: ignore
         gravity=MISSING,  # type: ignore
-        device="cpu",  # Note: Changed to GPU in __main__.py because initializing with CPU improves compatibility
-        physx=PhysxCfg(
+        device="cuda",  # cpu    Note: Changed to GPU in __main__.py because initializing with CPU improves compatibility
+        physics=PhysxCfg(
             min_position_iteration_count=2,
             min_velocity_iteration_count=1,
             enable_ccd=True,
             enable_stabilization=False,
+            enable_external_forces_every_iteration=True,
             bounce_threshold_velocity=0.0,
             friction_offset_threshold=0.01,
             friction_correlation_distance=0.005,
@@ -118,15 +119,12 @@ class BaseEnvCfg:
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
         ),
-        render=RenderCfg(
-            enable_translucency=True,
-            enable_reflections=True,
-        ),
     )
-    malloc_scale: float = 1.0
+    malloc_scale: float = 2.0
 
     ## Visuals
     visuals: VisualsCfg = VisualsCfg()
+    visualizer: KitVisualizerCfg = KitVisualizerCfg()
 
     ## Misc
     truncate_episodes: bool = True
@@ -169,6 +167,7 @@ class BaseEnvCfg:
         self.events.update(self)
 
         ## Simulation
+        self.sim.default_visualizer_cfg = self.visualizer
         self.decimation = math.floor(self.agent_rate / self.env_rate)
         self.sim.dt = self.env_rate
         self.sim.render_interval = self.decimation
@@ -196,38 +195,38 @@ class BaseEnvCfg:
     def _update_memory_allocation(self):
         _pow = math.floor(self.scene.num_envs**0.375) - 1
 
-        self.sim.physx.gpu_max_rigid_contact_count = math.floor(
+        self.sim.physics.gpu_max_rigid_contact_count = math.floor(
             self.malloc_scale * 2 ** min(13 + _pow, 31),
         )
-        self.sim.physx.gpu_max_rigid_patch_count = math.floor(
+        self.sim.physics.gpu_max_rigid_patch_count = math.floor(
             self.malloc_scale * 2 ** min(12 + _pow, 31),
         )
-        self.sim.physx.gpu_found_lost_pairs_capacity = math.floor(
+        self.sim.physics.gpu_found_lost_pairs_capacity = math.floor(
             self.malloc_scale * 2 ** min(17 + _pow, 31),
         )
-        self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = math.floor(
+        self.sim.physics.gpu_found_lost_aggregate_pairs_capacity = math.floor(
             self.malloc_scale * 2 ** min(16 + _pow, 31),
         )
-        self.sim.physx.gpu_total_aggregate_pairs_capacity = math.floor(
+        self.sim.physics.gpu_total_aggregate_pairs_capacity = math.floor(
             self.malloc_scale * 2 ** min(12 + _pow, 31),
         )
-        self.sim.physx.gpu_collision_stack_size = math.floor(
+        self.sim.physics.gpu_collision_stack_size = math.floor(
             self.malloc_scale * 2 ** min(23 + _pow, 31),
         )
-        self.sim.physx.gpu_heap_capacity = math.floor(
+        self.sim.physics.gpu_heap_capacity = math.floor(
             self.malloc_scale * 2 ** min(19 + _pow, 31),
         )
-        self.sim.physx.gpu_temp_buffer_capacity = math.floor(
+        self.sim.physics.gpu_temp_buffer_capacity = math.floor(
             self.malloc_scale * 2 ** min(16 + _pow, 31),
         )
-        self.sim.physx.gpu_max_soft_body_contacts = math.floor(
+        self.sim.physics.gpu_max_soft_body_contacts = math.floor(
             self.malloc_scale * 2 ** min(20 + _pow, 31),
         )
-        self.sim.physx.gpu_max_particle_contacts = math.floor(
+        self.sim.physics.gpu_max_particle_contacts = math.floor(
             self.malloc_scale * 2 ** min(22 + _pow, 31),
         )
 
-        self.sim.physx.gpu_max_num_partitions = 1 << bisect.bisect_left(
+        self.sim.physics.gpu_max_num_partitions = 1 << bisect.bisect_left(
             (3, 15, 127, 511, 1023), self.scene.num_envs
         )
 
@@ -388,7 +387,7 @@ class BaseEnvCfg:
         ## Select scenery from registry based on the selected variant
         scenery = self.scenery
         if isinstance(scenery, AssetVariant):
-            type_hints = get_type_hints(self)["scenery"]
+            type_hints = self._get_field_type_hint("scenery")
 
             ## Attributes
             assert self.spacing is not None
@@ -426,10 +425,15 @@ class BaseEnvCfg:
 
             if isinstance(type_hints, types.UnionType):
                 for typ in type_hints.__args__:
-                    if issubclass(typ, AssetVariant):
+                    if not isinstance(typ, type) or issubclass(typ, AssetVariant):
                         continue
-                    assert issubclass(typ, Scenery)
-                    for registered_scenery in typ.scenery_registry():
+                    if issubclass(typ, Scenery):
+                        registered_assets = typ.scenery_registry()
+                    elif issubclass(typ, MobileRobot):
+                        registered_assets = typ.robot_registry()
+                    else:
+                        continue
+                    for registered_scenery in registered_assets:
                         if issubclass(registered_scenery, typ):
                             try:
                                 _scenery = registered_scenery(
@@ -473,13 +477,14 @@ class BaseEnvCfg:
         )
 
         # Update prim path
+        _use_stacked = self.stack or isinstance(self.scenery, assets.GroundPlane)
         scenery.asset_cfg.prim_path = (
             prim_path_stacked
             if self.stack or isinstance(self.scenery, assets.GroundPlane)
             else prim_path
         )
         scenery.asset_cfg = scenery.as_asset_base_cfg(  # type: ignore
-            disable_articulation=True, disable_rigid_body=True
+            disable_articulation=True,  disable_rigid_body=True
         )
 
         # Add to the scene
@@ -505,7 +510,7 @@ class BaseEnvCfg:
         ## Select robot from registry based on the selected variant
         robot = self.robot
         if isinstance(robot, AssetVariant):
-            type_hints = get_type_hints(self)["robot"]
+            type_hints = self._get_field_type_hint("robot")
             if isinstance(type_hints, types.UnionType):
                 for typ in type_hints.__args__:
                     if issubclass(typ, AssetVariant):
@@ -804,6 +809,15 @@ class BaseEnvCfg:
         # Store the updated config in an internal state
         self._robot = robot
 
+    def _get_field_type_hint(self, field_name: str):
+        for cls in type(self).__mro__:
+            annotations = cls.__dict__.get("__annotations__", {})
+            if field_name in annotations:
+                return annotations[field_name]
+        raise AttributeError(
+            f"Configuration field '{field_name}' is missing from {type(self).__name__}"
+        )
+
     def _add_particles(self):
         assert self.spacing is not None
         if self.particles and self.spacing > 0.0:
@@ -859,8 +873,6 @@ class BaseEnvCfg:
             if isinstance(asset_cfg, DeformableObjectCfg):
                 self.sim.device = "cuda"
                 break
-        else:
-            self.sim.device = "cpu"
 
     def _setup_asset_extras(self):
         def _recursive_impl(attr: Any):

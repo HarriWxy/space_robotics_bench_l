@@ -21,6 +21,10 @@ class UnitreeH1(Humanoid):
         prim_path="{ENV_REGEX_NS}/unitree_h1",
         spawn=UsdFileCfg(
             usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/H1/h1.usd",
+            # H1's USD contains instanceable collision meshes.  Disable USD
+            # instancing before applying collision overrides so that
+            # contact_offset and rest_offset are authored on the colliders.
+            make_uninstanceable=True,
             activate_contact_sensors=True,
             collision_props=CollisionPropertiesCfg(
                 contact_offset=0.005, rest_offset=0.0
@@ -64,8 +68,8 @@ class UnitreeH1(Humanoid):
                     ".*_knee",
                     "torso",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                joint_effort_limit=300.0,
+                joint_velocity_limit=100.0,
                 stiffness={
                     ".*_hip_yaw": 150.0,
                     ".*_hip_roll": 150.0,
@@ -80,13 +84,19 @@ class UnitreeH1(Humanoid):
                     ".*_knee": 5.0,
                     "torso": 5.0,
                 },
+                armature={
+                    ".*_hip_.*": 0.01,
+                    ".*_knee": 0.01,
+                    "torso": 0.01,
+                },
             ),
             "feet": ImplicitActuatorCfg(
                 joint_names_expr=[".*_ankle"],
-                effort_limit=100.0,
-                velocity_limit=100.0,
+                joint_effort_limit=100.0,
+                joint_velocity_limit=100.0,
                 stiffness={".*_ankle": 20.0},
                 damping={".*_ankle": 4.0},
+                armature={".*_ankle": 0.01},
             ),
             "arms": ImplicitActuatorCfg(
                 joint_names_expr=[
@@ -95,8 +105,8 @@ class UnitreeH1(Humanoid):
                     ".*_shoulder_yaw",
                     ".*_elbow",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                joint_effort_limit=300.0,
+                joint_velocity_limit=100.0,
                 stiffness={
                     ".*_shoulder_pitch": 40.0,
                     ".*_shoulder_roll": 40.0,
@@ -108,6 +118,10 @@ class UnitreeH1(Humanoid):
                     ".*_shoulder_roll": 10.0,
                     ".*_shoulder_yaw": 10.0,
                     ".*_elbow": 10.0,
+                },
+                armature={
+                    ".*_shoulder_.*": 0.01,
+                    ".*_elbow": 0.01,
                 },
             ),
         },
@@ -183,8 +197,8 @@ class UnitreeG1(Humanoid):
                     ".*_knee_joint",
                     "torso_joint",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                joint_effort_limit=300.0,
+                joint_velocity_limit=100.0,
                 stiffness={
                     ".*_hip_yaw_joint": 150.0,
                     ".*_hip_roll_joint": 150.0,
@@ -206,7 +220,7 @@ class UnitreeG1(Humanoid):
                 },
             ),
             "feet": ImplicitActuatorCfg(
-                effort_limit=20.0,
+                joint_effort_limit=20.0,
                 joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
                 stiffness=20.0,
                 damping=2.0,
@@ -227,8 +241,8 @@ class UnitreeG1(Humanoid):
                     ".*_one_joint",
                     ".*_two_joint",
                 ],
-                effort_limit=300.0,
-                velocity_limit=100.0,
+                joint_effort_limit=300.0,
+                joint_velocity_limit=100.0,
                 stiffness=40.0,
                 damping=10.0,
                 armature={

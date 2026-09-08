@@ -23,7 +23,7 @@ def rpy_to_quat(
     *rpy: float | Sequence[float], deg: bool = True
 ) -> Tuple[float, float, float, float]:
     """
-    Returns wxyz quaternion from roll-pitch-yaw angles.
+    Returns an ``(x, y, z, w)`` quaternion from roll-pitch-yaw angles.
     Accepts either separate values or a sequence of 3 numbers.
 
     Args:
@@ -31,7 +31,7 @@ def rpy_to_quat(
         deg: If True, input is in degrees, otherwise in radians
 
     Returns:
-        Tuple of (w, x, y, z) quaternion components
+        Tuple of (x, y, z, w) quaternion components
 
     Raises:
         ValueError: If input doesn't contain exactly 3 values
@@ -46,7 +46,7 @@ def rpy_to_quat(
         )
 
     if roll == 0.0 and pitch == 0.0 and yaw == 0.0:
-        return 1.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 1.0
 
     if deg:
         roll, pitch, yaw = (deg_to_rad(angle) for angle in (roll, pitch, yaw))  # type: ignore
@@ -59,10 +59,10 @@ def rpy_to_quat(
     sr, sp, sy = math.sin(r2), math.sin(p2), math.sin(y2)
 
     return (
-        cy * cr * cp + sy * sr * sp,  # w
         cy * sr * cp - sy * cr * sp,  # x
         cy * cr * sp + sy * sr * cp,  # y
         sy * cr * cp - cy * sr * sp,  # z
+        cy * cr * cp + sy * sr * sp,  # w
     )
 
 

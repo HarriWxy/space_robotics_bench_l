@@ -7,8 +7,10 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
 from srb.core.manager import EventTermCfg, SceneEntityCfg
-from srb.core.mdp import push_by_setting_velocity  # noqa: F401
-from srb.core.mdp import reset_joints_by_scale
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_joints_by_scale,
+)
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
@@ -107,6 +109,19 @@ class LocomotionTask(Task):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
+        # Sanitize IMU data to prevent NaN propagation
+        # imu_lin_acc = torch.nan_to_num(self._imu_robot.data.lin_acc_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # imu_ang_vel = torch.nan_to_num(self._imu_robot.data.ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize velocity data
+        # vel_lin_robot = torch.nan_to_num(self._robot.data.root_lin_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # vel_ang_robot = torch.nan_to_num(self._robot.data.root_ang_vel_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize projected gravity
+        # projected_gravity_robot = torch.nan_to_num(self._robot.data.projected_gravity_b.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # # Sanitize joint data
+        # joint_pos_robot = torch.nan_to_num(self._robot.data.joint_pos.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_acc_robot = torch.nan_to_num(self._robot.data.joint_acc.torch, nan=0.0, posinf=0.0, neginf=0.0)
+        # joint_applied_torque_robot = torch.nan_to_num(self._robot.actuators.applied_effort.torch, nan=0.0, posinf=0.0, neginf=0.0)
+
         return _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
@@ -117,26 +132,27 @@ class LocomotionTask(Task):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
-            projected_gravity_robot=self._robot.data.projected_gravity_b,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
+            projected_gravity_robot=self._robot.data.projected_gravity_b.torch,
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
-            contact_last_air_time=self._contacts_robot.data.last_air_time,  # type: ignore
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_robot=self._contacts_robot.compute_first_contact(self.step_dt).torch,
+            contact_last_air_time=self._contacts_robot.data.last_air_time.torch,  # type: ignore
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             ## Robot descriptors
             robot_feet_indices=self._feet_indices,
             robot_undesired_contact_body_indices=self._undesired_contact_body_indices,
@@ -158,6 +174,7 @@ def _compute_step_return(
     ## States
     # Root
     tf_quat_robot: torch.Tensor,
+    tf_pos_robot: torch.Tensor,
     vel_lin_robot: torch.Tensor,
     vel_ang_robot: torch.Tensor,
     projected_gravity_robot: torch.Tensor,
@@ -187,6 +204,13 @@ def _compute_step_return(
     ## States ##
     ############
     ## Root
+    # # Sanitize quaternion before conversion to prevent NaN propagation
+    # tf_quat_robot = torch.nan_to_num(tf_quat_robot, nan=0.0)
+    # tf_quat_robot = torch.where(
+    #     torch.norm(tf_quat_robot, dim=-1, keepdim=True) < 1e-6,
+    #     torch.tensor([0.0, 0.0, 0.0, 1.0], device=device),
+    #     tf_quat_robot,
+    # )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
     tf_rot6d_robot = rotmat_to_rot6d(tf_rotmat_robot)
 
@@ -294,8 +318,15 @@ def _compute_step_return(
     ##################
     ## Terminations ##
     ##################
-    # No termination condition
-    termination = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    # Termination: Robot has fallen (body height too low)
+    # G1 init height is ~0.74m, terminate if below 0.3m
+    termination_fallen = tf_pos_robot[:, 2] < 0.3
+    # Termination: Bad orientation (robot flipped or severely tilted)
+    # z-axis of rotation matrix is the body's up direction in world frame
+    body_up_z = tf_rotmat_robot[:, 2, 2]  # cos(tilt angle)
+    termination_bad_orientation = body_up_z < 0.3  # tilted more than ~70 degrees
+
+    termination = termination_fallen | termination_bad_orientation
     # Truncation
     truncation = (
         episode_length >= max_episode_length
@@ -329,16 +360,16 @@ def _compute_step_return(
             },
         },
         {
-            "penalty_action_rate": penalty_action_rate,
-            "penalty_joint_torque": penalty_joint_torque,
-            "penalty_joint_acceleration": penalty_joint_acceleration,
-            "penalty_undesired_robot_contacts": penalty_undesired_robot_contacts,
+            "pen_action_rate": penalty_action_rate,
+            "pen_joint_torque": penalty_joint_torque,
+            "pen_joint_acceleration": penalty_joint_acceleration,
+            "pen_und_robot_contacts": penalty_undesired_robot_contacts,
             "reward_cmd_lin_vel_xy": reward_cmd_lin_vel_xy,
             "reward_cmd_ang_vel_z": reward_cmd_ang_vel_z,
             "reward_feet_air_time": reward_feet_air_time,
-            "penalty_undesired_lin_vel_z": penalty_undesired_lin_vel_z,
-            "penalty_undesired_ang_vel_xy": penalty_undesired_ang_vel_xy,
-            "penalty_gravity_rotation_alignment": penalty_gravity_rotation_alignment,
+            "pen_und_lin_vel_z": penalty_undesired_lin_vel_z,
+            "pen_und_ang_vel_xy": penalty_undesired_ang_vel_xy,
+            "pen_gravity_rot_ali": penalty_gravity_rotation_alignment,
         },
         termination,
         truncation,

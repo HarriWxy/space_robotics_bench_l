@@ -5,7 +5,7 @@ import torch
 from srb import assets
 from srb.core.action import WheeledDriveAction
 from srb.core.asset import AssetVariant, GroundRobot
-from srb.core.env import ViewerCfg
+from srb.core.env import KitVisualizerCfg
 from srb.core.env.mobile.env import (
     MobileEnv,
     MobileEnvCfg,
@@ -65,7 +65,7 @@ class GroundEnvCfg(MobileEnvCfg):
     agent_rate: float = 1.0 / 25.0
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(7.5, -7.5, 15.0), lookat=(0.0, 0.0, 0.0), origin_type="env"
     )
 

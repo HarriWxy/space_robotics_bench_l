@@ -6,7 +6,7 @@ from srb import assets
 from srb.core.action import ThrustAction
 from srb.core.asset import AssetVariant, MobileRobot, OrbitalRobot, Scenery
 from srb.core.domain import Domain
-from srb.core.env import ViewerCfg
+from srb.core.env import KitVisualizerCfg
 from srb.core.env.mobile.env import (
     MobileEnv,
     MobileEnvCfg,
@@ -72,7 +72,7 @@ class OrbitalEnvCfg(MobileEnvCfg):
     agent_rate: float = 1.0 / 25.0
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(10.0, -10.0, 10.0), lookat=(0.0, 0.0, 0.0), origin_type="env"
     )
 

@@ -1,5 +1,7 @@
 from dataclasses import MISSING
 
+import isaaclab.cloner as cloner
+from isaaclab.cloner import CloneCfg
 from srb.core.asset import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from srb.core.env import InteractiveSceneCfg
 from srb.utils.cfg import configclass
@@ -22,3 +24,6 @@ class BaseSceneCfg(InteractiveSceneCfg):
     payload: AssetBaseCfg | None = None
     manipulator: ArticulationCfg | None = None
     end_effector: AssetBaseCfg | None = None
+    clone_cfg: CloneCfg = CloneCfg(
+        clone_strategy=cloner.random,
+    )

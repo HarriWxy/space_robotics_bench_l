@@ -4,10 +4,11 @@
 set -e
 
 ## Config
+ISAAC_SIM_VERSION="${ISAAC_SIM_VERSION:-"6.0.0"}"
 SRC_URLS=(
-    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.001"
-    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.002"
-    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.003"
+    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-${ISAAC_SIM_VERSION}.zip.001"
+    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-${ISAAC_SIM_VERSION}.zip.002"
+    "https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-${ISAAC_SIM_VERSION}.zip.003"
 )
 DEST_DIR="${1:-"${DEST_DIR:-"$HOME/isaac-sim-assets"}"}"
 ARCHIVE_PATH="/tmp/isaac-sim-assets-$(date +%s).zip"

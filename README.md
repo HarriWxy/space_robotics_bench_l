@@ -1,5 +1,18 @@
 <h1 align="center">Space Robotics Bench</h1>
 
+## What's new
+
+### Isaac Sim 6.0 compatibility
+
+The `isaacsim6` branch updates SRB from the Isaac Sim 5.x/Python 3.11 stack to Isaac Sim 6.0/Python 3.12.
+
+- **Runtime and dependencies**: Docker, installation scripts, `pyproject.toml`, and `requirements.txt` now target Isaac Sim 6.0, Python 3.12, and the corresponding Isaac Lab 3.0 development dependencies.
+- **Kit and editor configuration**: Isaac Sim experience files and VS Code extension paths are aligned with the Isaac Sim 6.0 extension layout, including the PhysX/Newton and deprecated-extension locations.
+- **API compatibility**: PhysX interface access, indexed articulation state writes, USD Physics gravity attributes, contact/reset events, and affected asset/action APIs have been updated for the Isaac Sim 6.0 interfaces.
+- **Development helpers**: `.gitignore` excludes local editor, agent, and cache files. `upisaaclab.sh` fast-forwards the sibling `../isaaclab` checkout to `origin/release/3.0.0` and synchronizes its skills into this project.
+
+The branch should be validated with a complete Isaac Sim 6.0 GPU startup and task smoke test after the local Isaac Sim and Isaac Lab environments are installed.
+
 <p align="center">
   <a href="https://AndrejOrsula.github.io/space_robotics_bench"><img alt="" src="https://github.com/user-attachments/assets/049289be-0c99-497b-be37-c4975d924524" width="100%"></a>
 </p>

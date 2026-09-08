@@ -1,3 +1,4 @@
+from srb.assets.object.tool import RobotiqHandE
 from srb.core.action import (  # noqa: F401
     ActionGroup,
     DifferentialIKControllerCfg,
@@ -32,9 +33,9 @@ class UR3(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3/ur3.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -61,8 +62,8 @@ class UR3(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -175,9 +176,9 @@ class UR3e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3e/ur3e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -204,8 +205,8 @@ class UR3e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -318,9 +319,9 @@ class UR5(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5/ur5.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -347,8 +348,11 @@ class UR5(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                # Preserve the UR5 USD limit of 180 deg/s (pi rad/s).  The
+                # previous 100 rad/s solver limit lets random IK commands
+                # drive links through static terrain before contacts resolve.
+                joint_velocity_limit=deg_to_rad(180.0),
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -454,6 +458,10 @@ class UR5(SerialManipulator):
     )
 
 
+class UR5RobotiqHandE(UR5):
+    end_effector: RobotiqHandE | None = RobotiqHandE()
+
+
 class UR5e(SerialManipulator):
     ## Model
     asset_cfg: ArticulationCfg = ArticulationCfg(
@@ -461,9 +469,9 @@ class UR5e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -490,8 +498,8 @@ class UR5e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -640,9 +648,9 @@ class UR10(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/UniversalRobots/UR10/ur10_instanceable.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -669,8 +677,8 @@ class UR10(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -786,9 +794,9 @@ class UR10e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur10e/ur10e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -815,8 +823,8 @@ class UR10e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -929,9 +937,9 @@ class UR16e(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur16e/ur16e.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -958,8 +966,8 @@ class UR16e(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1072,9 +1080,9 @@ class UR20(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur20/ur20.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -1101,8 +1109,8 @@ class UR20(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1215,9 +1223,9 @@ class UR30(SerialManipulator):
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur30/ur30.usd",
             activate_contact_sensors=True,
-            collision_props=CollisionPropertiesCfg(
-                contact_offset=0.005, rest_offset=0.0
-            ),
+            # collision_props=CollisionPropertiesCfg(
+            #     contact_offset=0.005, rest_offset=0.0
+            # ),
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
@@ -1244,8 +1252,8 @@ class UR30(SerialManipulator):
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                velocity_limit=100.0,
-                effort_limit=87.0,
+                joint_velocity_limit=100.0,
+                joint_effort_limit=87.0,
                 stiffness=800.0,
                 damping=40.0,
             ),
@@ -1355,7 +1363,6 @@ class RandomURManipulator(SerialManipulator):
     asset_cfg: ArticulationCfg = UR30().asset_cfg.copy()  # type: ignore
     asset_cfg.prim_path = "{ENV_REGEX_NS}/anymal"
     asset_cfg.spawn = MultiAssetSpawnerCfg(
-        random_choice=False,
         assets_cfg=(
             UR3e().asset_cfg.spawn,  # type: ignore
             UR5().asset_cfg.spawn,  # type: ignore

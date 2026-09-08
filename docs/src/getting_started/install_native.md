@@ -46,7 +46,7 @@ set -Ux ISAAC_SIM_PYTHON "$HOME/isaac-sim/python.sh"
 
 ## 3. Install NVIDIA Isaac Lab 3.0
 
-> Official instructions: [Isaac Lab — Installation](https://isaac-sim.github.io/IsaacLab/v3.0.0-beta2/source/setup/installation/binaries_installation.html#installing-isaac-lab)
+> Official instructions: [Isaac Lab — Installation](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html#installing-isaac-lab)
 
 Install Isaac Lab either by following the official instructions above or using the provided convenience [script](https://github.com/AndrejOrsula/space_robotics_bench/blob/main/scripts/install_isaaclab.bash):
 

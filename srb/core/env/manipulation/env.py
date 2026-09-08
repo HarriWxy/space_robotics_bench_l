@@ -11,7 +11,13 @@ from srb.core.asset import (
     RigidObject,
     RigidObjectCfg,
 )
-from srb.core.env import BaseEventCfg, BaseSceneCfg, DirectEnv, DirectEnvCfg, ViewerCfg
+from srb.core.env import (
+    BaseEventCfg,
+    BaseSceneCfg,
+    DirectEnv,
+    DirectEnvCfg,
+    KitVisualizerCfg,
+)
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import FRAME_MARKER_SMALL_CFG
 from srb.core.mdp import reset_joints_by_offset
@@ -47,6 +53,7 @@ class ManipulationSceneCfg(BaseSceneCfg):
         prim_path=MISSING,  # type: ignore
     )
     contacts_end_effector: ContactSensorCfg | None = None
+    contacts_end_effector_collision: ContactSensorCfg | None = None
 
 
 @configclass
@@ -80,7 +87,7 @@ class ManipulationEnvCfg(DirectEnvCfg):
     agent_rate: float = 1.0 / 50.0
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(1.85, 0.0, 1.85), lookat=(0.125, 0.0, 0.25), origin_type="env"
     )
 
@@ -136,14 +143,17 @@ class ManipulationEnvCfg(DirectEnvCfg):
         self.scene.contacts_robot.prim_path = f"{self.scene.robot.prim_path}/.*"
 
         # Sensor: End-effector contacts
-        self.scene.contacts_end_effector = (
-            ContactSensorCfg(
-                prim_path=f"{self._robot.end_effector.asset_cfg.prim_path}/.*",
+        if self._robot.end_effector is not None:
+            end_effector_prim_path = self._robot.end_effector.asset_cfg.prim_path
+            self.scene.contacts_end_effector = ContactSensorCfg(
+                prim_path=f"{end_effector_prim_path}/.*",
             )
-            if self._robot.end_effector is not None
-            and isinstance(self._robot.end_effector, RigidObjectCfg)
-            else None
-        )
+            self.scene.contacts_end_effector_collision = ContactSensorCfg(
+                prim_path=f"{end_effector_prim_path}/.*",
+            )
+        else:
+            self.scene.contacts_end_effector = None
+            self.scene.contacts_end_effector_collision = None
 
 
 class ManipulationEnv(DirectEnv):
@@ -162,4 +172,7 @@ class ManipulationEnv(DirectEnv):
         )
         self._contacts_end_effector: ContactSensor | None = self.scene.sensors.get(  # type: ignore
             "contacts_end_effector", None
+        )
+        self._contacts_end_effector_collision: ContactSensor | None = self.scene.sensors.get(  # type: ignore
+            "contacts_end_effector_collision", None
         )

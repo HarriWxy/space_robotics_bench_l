@@ -8,7 +8,7 @@ ignore_missing_imports = true
 
 [project]
 name = "srb"
-version = "0.0.6"
+version = "0.0.6.1"
 description = "Robot Learning Beyond Earth"
 authors = [{ name = "Andrej Orsula", email = "orsula.andrej@gmail.com" }]
 maintainers = [{ name = "Andrej Orsula", email = "orsula.andrej@gmail.com" }]
@@ -60,6 +60,7 @@ algo = [
   "srb[sbx]",
   "srb[skrl]",
   "srb[robomimic]",
+  "srb[policyflow]",
 ]
 dreamer = [
   #
@@ -88,6 +89,11 @@ skrl = [
 robomimic = [
   #
   # "robomimic@git+https://github.com/ARISE-Initiative/robomimic.git@TODO",
+]
+policyflow = [
+  #
+  # Install PolicyFlow from local repo: cd ~/PolicyFlow_srb/policyflow && pip install -e .
+  "einops~=0.6",
 ]
 ## Hardware
 hw = [

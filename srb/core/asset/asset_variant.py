@@ -4,9 +4,9 @@ from typing_extensions import Self
 
 
 class AssetVariant(str, Enum):
-    PRIMITIVE = auto()
-    DATASET = auto()
-    PROCEDURAL = auto()
+    PRIMITIVE = "primitive"
+    DATASET = "dataset"
+    PROCEDURAL = "procedural"
 
     def __str__(self) -> str:
         return self.name.lower()

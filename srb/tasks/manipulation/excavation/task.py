@@ -10,22 +10,21 @@ import srb.core.sim.spawners.particles.utils as particle_utils
 from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import (
-    Articulation,
     AssetBase,
     AssetBaseCfg,
     AssetVariant,
+    BaseArticulation,
     Manipulator,
     MobileRobot,
     Pedestal,
 )
 from srb.core.env import (
+    KitVisualizerCfg,
     ManipulationEnv,
     ManipulationEnvCfg,
     ManipulationEventCfg,
     ManipulationSceneCfg,
-    ViewerCfg,
 )
-from srb.core.sensor import ContactSensor
 from srb.core.sim import PyramidParticlesSpawnerCfg
 from srb.utils.cfg import DEFAULT_DATETIME_FORMAT, configclass
 from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
@@ -91,7 +90,7 @@ class TaskCfg(ManipulationEnvCfg):
     assemble_rigid_end_effector: bool = False
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(2.5, 0.0, 2.5), lookat=(0.5, 0.0, 0.5), origin_type="env"
     )
 
@@ -187,7 +186,7 @@ class Task(ManipulationEnv):
             )
             # Control smoothness
             self._previous_joint_acc_robot = torch.zeros_like(
-                self._robot.data.joint_acc
+                self._robot.data.joint_acc.torch
             )
             self._metric_control_smoothness = torch.zeros(
                 self.num_envs, dtype=torch.float32, device=self.device
@@ -262,35 +261,35 @@ class Task(ManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
             # Particles
             particles_pos=self._cached_particles_pos,
@@ -337,7 +336,7 @@ class Task(ManipulationEnv):
 
                 # Control smoothness
                 joint_jerk_robot = (
-                    self._robot.data.joint_acc - self._previous_joint_acc_robot
+                    self._robot.data.joint_acc.torch - self._previous_joint_acc_robot
                 ) / self.cfg.agent_rate
                 self._metric_control_smoothness += torch.mean(
                     torch.square(joint_jerk_robot), dim=1
@@ -364,7 +363,7 @@ class Task(ManipulationEnv):
                     logging.info(
                         f"Env IDs {terminated_env_ids.tolist()} - Excavated volume: {excavated_volume.cpu().numpy()}, Generated dust: {generated_dust.cpu().numpy()}, Control smoothness: {control_smoothness.cpu().numpy()}"
                     )
-            self._previous_joint_acc_robot = self._robot.data.joint_acc.clone()
+            self._previous_joint_acc_robot = self._robot.data.joint_acc.torch.clone()
 
         return step_return
 

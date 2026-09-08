@@ -71,9 +71,11 @@ class GuiInterface(InterfaceBase):
         exit(0)
 
     def set_gravity(self, gravity: float):
+        from pxr import UsdPhysics  # noqa: PLC0415
+
         self._env.unwrapped.sim.cfg.gravity = (0.0, 0.0, -gravity)  # type: ignore
 
-        physics_scene = self._env.unwrapped.sim._physics_context._physics_scene  # type: ignore
+        physics_scene = UsdPhysics.Scene.Get(self._env.unwrapped.sim.stage, self._env.unwrapped.sim.cfg.physics_prim_path)  # type: ignore
 
         gravity = numpy.asarray(self._env.unwrapped.sim.cfg.gravity)  # type: ignore
         gravity_magnitude = numpy.linalg.norm(gravity)
@@ -84,8 +86,16 @@ class GuiInterface(InterfaceBase):
         else:
             gravity_direction = gravity
 
-        physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction))
-        physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude)
+        gravity_dir_attr = physics_scene.GetGravityDirectionAttr()
+        if gravity_dir_attr is None:
+            physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction))
+        else:
+            gravity_dir_attr.Set(Gf.Vec3f(*gravity_direction))
+        gravity_mag_attr = physics_scene.GetGravityMagnitudeAttr()
+        if gravity_mag_attr is None:
+            physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude)
+        else:
+            gravity_mag_attr.Set(gravity_magnitude)
 
     def _cb_reset(self, msg: Bool):
         self._exec_queue.put((self.reset, {}))

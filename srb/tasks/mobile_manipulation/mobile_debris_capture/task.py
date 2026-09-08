@@ -7,23 +7,23 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.action import ThrustAction
 from srb.core.asset import (
-    Articulation,
     AssetVariant,
+    BaseArticulation,
     Object,
     OrbitalManipulator,
     RigidObject,
     RigidObjectCfg,
 )
 from srb.core.env import (
+    KitVisualizerCfg,
     OrbitalManipulationEnv,
     OrbitalManipulationEnvCfg,
     OrbitalManipulationEventCfg,
     OrbitalManipulationSceneCfg,
-    ViewerCfg,
 )
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import reset_root_state_uniform
-from srb.core.sensor import ContactSensor
+from srb.core.sensor import BaseContactSensor
 from srb.core.sim import SimforgeAssetCfg
 from srb.tasks.manipulation.debris_capture.asset import select_debris
 from srb.utils.cfg import configclass
@@ -92,7 +92,7 @@ class TaskCfg(OrbitalManipulationEnvCfg):
     is_finite_horizon: bool = True
 
     ## Viewer
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(8.0, -8.0, 4.0), lookat=(2.0, -2.0, 0.0), origin_type="env"
     )
 
@@ -127,7 +127,7 @@ class Task(OrbitalManipulationEnv):
 
         ## Get scene assets
         self._obj: RigidObject = self.scene["debris"]
-        self._contacts_end_effector: ContactSensor = self.scene["contacts_end_effector"]
+        self._contacts_end_effector: BaseContactSensor = self.scene["contacts_end_effector"]
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
@@ -154,53 +154,53 @@ class Task(OrbitalManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Root
-            tf_pos_robot=self._robot.data.root_pos_w,
-            tf_quat_robot=self._robot.data.root_quat_w,
-            vel_lin_robot=self._robot.data.root_lin_vel_b,
-            vel_ang_robot=self._robot.data.root_ang_vel_b,
+            tf_pos_robot=self._robot.data.root_pos_w.torch,
+            tf_quat_robot=self._robot.data.root_quat_w.torch,
+            vel_lin_robot=self._robot.data.root_lin_vel_b.torch,
+            vel_ang_robot=self._robot.data.root_ang_vel_b.torch,
             # Joints
-            joint_pos_robot=self._manipulator.data.joint_pos,
+            joint_pos_robot=self._manipulator.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._manipulator.data.soft_joint_pos_limits
+                self._manipulator.data.soft_joint_pos_limits.torch
                 if torch.all(
-                    torch.isfinite(self._manipulator.data.soft_joint_pos_limits)
+                    torch.isfinite(self._manipulator.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_acc_robot=self._manipulator.data.joint_acc,
-            joint_applied_torque_robot=self._manipulator.data.applied_torque,
+            joint_acc_robot=self._manipulator.data.joint_acc.torch,
+            joint_applied_torque_robot=self._manipulator.actuators.applied_effort.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
-            tf_pos_obj=self._obj.data.root_pos_w,
-            tf_quat_obj=self._obj.data.root_quat_w,
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
+            tf_pos_obj=self._obj.data.root_pos_w.torch,
+            tf_quat_obj=self._obj.data.root_quat_w.torch,
             # Velocities
-            vel_obj=self._obj.data.root_com_vel_w,
+            vel_obj=self._obj.data.root_com_vel_w.torch,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
+            if self._contacts_end_effector is not None
             else None,
             # IMU
-            imu_lin_acc=self._imu_robot.data.lin_acc_b,
-            imu_ang_vel=self._imu_robot.data.ang_vel_b,
+            imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
+            imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
             # Fuel
             remaining_fuel=remaining_fuel,
         )

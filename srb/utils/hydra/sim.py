@@ -133,6 +133,8 @@ def hydra_task_config(
                 # Update the configs with the Hydra command line arguments
                 # Env_cfg.from_dict(hydra_env_cfg["env"])
                 env_cfg = reconstruct_object(env_cfg, hydra_env_cfg["env"])
+                # Rebuild derived scene/action state after CLI overrides mutate the config tree.
+                env_cfg.__post_init__()
                 # Replace strings that represent gymnasium spaces because OmegaConf does not support them.
                 # This must be done after converting the env configs from dictionary to avoid internal reinterpretations
                 replace_strings_with_env_cfg_spaces(env_cfg)
@@ -161,6 +163,7 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
             and isinstance(updates, str)
             and all(c not in string.whitespace for c in updates)
         ):
+            normalized_updates = updates.replace("+", "_")
             if ":" in updates and not callable(obj):
                 ## Object updated via its full module path and name
                 mod_name, attr_name = updates.split(":")
@@ -182,7 +185,14 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
                     if variant := AssetVariant.from_str(updates):
                         # Asset variant updated via its name
                         return variant
-                    elif asset_class := AssetRegistry.get_by_name(updates):
+                    elif asset_class := (
+                        AssetRegistry.get_by_name(updates)
+                        or (
+                            AssetRegistry.get_by_name(normalized_updates)
+                            if normalized_updates != updates
+                            else None
+                        )
+                    ):
                         # Asset variant updated via asset name
                         return asset_class()  # type: ignore
 
@@ -411,9 +421,23 @@ def reconstruct_object(obj: Any, updates: Any) -> Any:
         # Enum
         if isinstance(obj, enum.Enum):
             if isinstance(updates, str):
-                return obj.__class__[updates.strip().upper()]
+                normalized_updates = updates.strip()
+                try:
+                    return obj.__class__[normalized_updates.upper()]
+                except KeyError:
+                    # ``str, Enum`` members using ``auto()`` have values such
+                    # as ``"4"``. OmegaConf can preserve that value instead
+                    # of the member name when rebuilding a registered config.
+                    # Accept both representations for CLI overrides.
+                    for member in obj.__class__:
+                        if str(member.value).upper() == normalized_updates.upper():
+                            return member
             if isinstance(updates, Mapping) and "_name_" in updates.keys():
                 return obj.__class__[updates["_name_"]]
+            if updates is not None:
+                for member in obj.__class__:
+                    if updates == member.value or str(updates) == str(member.value):
+                        return member
             if updates is None and hasattr(obj, "NONE"):
                 # Handle enums with "NONE" value
                 return obj.__class__.NONE  # type: ignore

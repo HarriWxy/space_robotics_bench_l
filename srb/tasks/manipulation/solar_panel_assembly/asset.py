@@ -1,9 +1,12 @@
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Literal, Tuple
 
+from isaaclab.assets import Articulation, DeformableObject, RigidObject
 from pydantic import BaseModel
+from pxr import Usd
 
 from srb import assets
-from srb.core.asset import RigidObjectCfg
+from srb.core.asset import AssetBaseCfg, RigidObjectCfg
+from srb.core.sim import SpawnerCfg
 
 if TYPE_CHECKING:
     from srb._typing import AnyEnvCfg
@@ -12,6 +15,20 @@ if TYPE_CHECKING:
 class PanelCfg(BaseModel, arbitrary_types_allowed=True):
     asset_cfg: RigidObjectCfg
     offset_pos: Tuple[float, float, float] = (0.0, 0.0, 0.15)
+
+
+# Resolve forward references in RigidObjectCfg (which uses `from __future__ import annotations`)
+PanelCfg.model_rebuild(
+    _types_namespace={
+        "Articulation": Articulation,
+        "DeformableObject": DeformableObject,
+        "RigidObject": RigidObject,
+        "SpawnerCfg": SpawnerCfg,
+        "Usd": Usd,
+        "Literal": Literal,
+        "InitialStateCfg": AssetBaseCfg.InitialStateCfg,
+    }
+)
 
 
 @staticmethod

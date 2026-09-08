@@ -1,5 +1,5 @@
 from functools import cached_property
-from typing import Dict, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Sequence, Tuple
 
 import gymnasium
 import numpy
@@ -9,12 +9,14 @@ from isaaclab.envs import DirectRLEnv as __DirectRLEnv
 from srb._typing import StepReturn
 from srb.core.asset import Articulation, AssetBase, RigidObject
 from srb.core.manager import ActionManager
-from srb.core.sim.robot_setup import AssembledBodies, RobotAssembler
 from srb.utils import logging
 from srb.utils.math import combine_frame_transforms, subtract_frame_transforms
 from srb.utils.str import resolve_env_prim_path
 
 from .cfg import DirectEnvCfg
+
+if TYPE_CHECKING:
+    from srb.core.sim.robot_setup import AssembledBodies
 
 
 class __PostInitCaller(type):
@@ -47,33 +49,55 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
             self.scene["scenery"] if self.cfg.scenery is not None else None
         )
         self._robot: Articulation = self.scene["robot"]
+        self.cfg.extras = True
 
     def __post_init__(self):
+        _step_return_ready = False
         if self._use_step_return_workflow:
-            self._step_return = self.extract_step_return()
+            try:
+                self._step_return = self.extract_step_return()
+                _step_return_ready = True
+            except RuntimeError as exc:
+                if "same device" in str(exc) or "devices" in str(exc):
+                    # Sensor / articulation tensors may still reside on CPU
+                    # during __post_init__ because the simulation context has
+                    # not fully propagated the device setting yet.  Defer
+                    # validation — _step_return will be populated on the first
+                    # call to _get_dones() inside the simulation loop.
+                    logging.warning(
+                        "Deferring extract_step_return() in __post_init__ due to "
+                        "device mismatch (will be validated on first step): %s",
+                        exc,
+                    )
+                else:
+                    raise
 
-            # Verify that all observation components have the correct shape and are finite
-            for obs_cat, obs_group in self._step_return.observation.items():
-                for obs_key, obs_val in obs_group.items():
-                    assert obs_val.size(0) == self.num_envs, (
-                        f"Observation component '{obs_cat}/{obs_key}' has an incorrect shape. "
-                        f"Expected: ({self.num_envs}, ...) | Actual: {obs_val.shape}"
+            if _step_return_ready:
+                # Verify that all observation components have the correct shape and are finite
+                for obs_cat, obs_group in self._step_return.observation.items():
+                    for obs_key, obs_val in obs_group.items():
+                        assert obs_val.size(0) == self.num_envs, (
+                            f"Observation component '{obs_cat}/{obs_key}' has an incorrect shape. "
+                            f"Expected: ({self.num_envs}, ...) | Actual: {obs_val.shape}"
+                        )
+                        assert torch.isfinite(obs_val).all(), (
+                            f"Observation component '{obs_cat}/{obs_key}' contains non-finite values."
+                        )
+                # Verify that all reward components have the correct shape and are finite
+                for rew_key, rew_val in self._step_return.reward.items():
+                    assert rew_val.shape == (self.num_envs,), (
+                        f"Reward component '{rew_key}' has an incorrect shape. "
+                        f"Expected: ({self.num_envs},) | Actual: {rew_val.shape}"
                     )
-                    assert torch.isfinite(obs_val).all(), (
-                        f"Observation component '{obs_cat}/{obs_key}' contains non-finite values."
+                    assert torch.isfinite(rew_val).all(), (
+                        f"Reward component '{rew_key}' contains non-finite values."
                     )
-            # Verify that all reward components have the correct shape and are finite
-            for rew_key, rew_val in self._step_return.reward.items():
-                assert rew_val.shape == (self.num_envs,), (
-                    f"Reward component '{rew_key}' has an incorrect shape. "
-                    f"Expected: ({self.num_envs},) | Actual: {rew_val.shape}"
-                )
-                assert torch.isfinite(rew_val).all(), (
-                    f"Reward component '{rew_key}' contains non-finite values."
-                )
 
         # Automatically determine the action and observation spaces for all sub-classes
-        self._update_gym_env_spaces()
+        if _step_return_ready:
+            self._update_gym_env_spaces()
+        else:
+            self._gym_spaces_deferred = True
 
         ## Initialize action/observation delay buffers
         action_delay = self.cfg.action_delay_steps
@@ -107,7 +131,7 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
             self._action_history_buffer: torch.Tensor | None = None
         # Allocate observation delay buffers
         # TODO[mid]: Handle observation delay for non step return workflows
-        if self._use_step_return_workflow and self._max_obs_delay_steps > 0:
+        if self._use_step_return_workflow and self._max_obs_delay_steps > 0 and _step_return_ready:
             logging.info(
                 f"Observation delay of maximum {self._max_obs_delay_steps} agent steps enabled."
             )
@@ -132,6 +156,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
             )
         else:
             self._obs_history_buffer: Dict[str, Dict[str, torch.Tensor]] | None = None
+
+        # Author joint assemblies only after the simulator has been initialized and
+        # the first scene reset has populated the asset poses.
+        self._setup_joint_assemblies()
 
     def close(self):
         if not self._is_closed:
@@ -254,6 +282,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 truncation=step_return.truncation,
                 info=step_return.info,
             )
+
+        # successsum = torch.sum(step_return.observation["state"]["success"])
+        # if successsum > 0:
+        #     print("success sum: ", successsum.item(),end="")
 
         return step_return
 
@@ -437,6 +469,32 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
     def _get_dones(self) -> Tuple[torch.Tensor, torch.Tensor]:
         if self._use_step_return_workflow:
             self._step_return = self._extract_step_return_wrapped()
+
+            # Complete deferred __post_init__ setup on first successful call
+            if getattr(self, "_gym_spaces_deferred", False):
+                self._gym_spaces_deferred = False
+                self._update_gym_env_spaces()
+                if self._max_obs_delay_steps > 0:
+                    logging.info(
+                        "Observation delay of maximum %d agent steps enabled.",
+                        self._max_obs_delay_steps,
+                    )
+                    self._obs_history_buffer: Dict[str, Dict[str, torch.Tensor]] | None = {
+                        cat: {
+                            key: torch.zeros(
+                                (self._max_obs_delay_steps, self.num_envs, *val.shape[1:]),
+                                dtype=val.dtype,
+                                device=self.device,
+                            )
+                            for key, val in group.items()
+                        }
+                        for cat, group in self._step_return.observation.items()
+                    }
+                    self._obs_history_buffer_ptr: int = 0
+                    self._observation_delay_steps = torch.zeros(
+                        self.num_envs, dtype=torch.long, device=self.device
+                    )
+
             if self.cfg.extras:
                 self.extras["reward_terms"] = self._step_return.reward
             if self._step_return.info:
@@ -447,12 +505,16 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
 
     def _get_rewards(self) -> torch.Tensor:
         if self._use_step_return_workflow:
+            if not hasattr(self, "_step_return"):
+                self._step_return = self._extract_step_return_wrapped()
             return _sum_rewards(self._step_return.reward)
         else:
             return super()._get_rewards()  # type: ignore
 
     def _get_observations(self) -> Dict[str, torch.Tensor]:
         if self._use_step_return_workflow:
+            if not hasattr(self, "_step_return"):
+                self._step_return = self._extract_step_return_wrapped()
             return _flatten_observations(self._step_return.observation)
         else:
             return super()._get_observations()  # type: ignore
@@ -460,8 +522,10 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
     def _setup_scene(self):
         super()._setup_scene()
 
-        ## Handle assemblies
-        self.joint_assemblies: Dict[str, Sequence[AssembledBodies]] = {}
+    def _setup_joint_assemblies(self):
+        from srb.core.sim.robot_setup import RobotAssembler
+
+        self.joint_assemblies: Dict[str, Sequence["AssembledBodies"]] = {}
         for key, assembly_cfg in self.cfg.joint_assemblies.items():
             self.joint_assemblies[key] = tuple(
                 RobotAssembler().assemble_rigid_bodies(
@@ -479,15 +543,18 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 for i in range(self.num_envs)
             )
 
+        if self.joint_assemblies:
+            self._update_assembly_fixed_joint_transforms(torch.arange(0,self.num_envs, device=self.device))
+
     def _update_assembly_fixed_joint_transforms(self, env_ids: Sequence[int]):
         for key, assembly_cfg in self.cfg.joint_assemblies.items():
             attach_asset: RigidObject | Articulation = self.scene[key]
             base_asset: RigidObject | Articulation = self.scene[
                 assembly_cfg.base_path.rsplit("/", 1)[-1]
             ]
-            attach_root_state = attach_asset.data.root_state_w[env_ids]
+            attach_root_state = attach_asset.data.root_state_w.torch[env_ids]
             attach_body_state = (
-                attach_asset.data.body_state_w[
+                attach_asset.data.body_state_w.torch[
                     env_ids,
                     attach_asset.find_bodies(
                         assembly_cfg.attach_mount_frame.removeprefix("/")
@@ -497,14 +564,14 @@ class DirectEnv(__DirectRLEnv, metaclass=__PostInitCaller):
                 else attach_root_state
             )
             base_body_state = (
-                base_asset.data.body_state_w[
+                base_asset.data.body_state_w.torch[
                     env_ids,
                     base_asset.find_bodies(
                         assembly_cfg.base_mount_frame.removeprefix("/")
                     )[0][0],
                 ]
                 if assembly_cfg.base_mount_frame
-                else base_asset.data.root_state_w[env_ids]
+                else base_asset.data.root_state_w.torch[env_ids]
             )
 
             pose = torch.cat(

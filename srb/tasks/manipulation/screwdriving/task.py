@@ -6,10 +6,10 @@ import torch
 from srb import assets
 from srb._typing import StepReturn
 from srb.core.asset import (
-    Articulation,
     AssetBase,
     AssetBaseCfg,
     AssetVariant,
+    BaseArticulation,
     Manipulator,
     Object,
     RigidObject,
@@ -23,9 +23,11 @@ from srb.core.env import (
     ManipulationSceneCfg,
 )
 from srb.core.manager import EventTermCfg, SceneEntityCfg
-from srb.core.mdp import push_by_setting_velocity  # noqa: F401
-from srb.core.mdp import reset_root_state_uniform
-from srb.core.sensor import ContactSensor, ContactSensorCfg
+from srb.core.mdp import (
+    push_by_setting_velocity,  # noqa: F401
+    reset_root_state_uniform,
+)
+from srb.core.sensor import ContactSensorCfg
 from srb.utils.cfg import configclass
 from srb.utils.math import (
     combine_frame_transforms,
@@ -96,7 +98,7 @@ class TaskCfg(ManipulationEnvCfg):
 
     ## Target
     tf_pos_target: Tuple[float, float, float] = (0.65, 0.0, 0.493)
-    tf_quat_target: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tf_quat_target: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
 
     def __post_init__(self):
         super().__post_init__()
@@ -174,44 +176,44 @@ class Task(ManipulationEnv):
             act_previous=self.action_manager.prev_action,
             ## States
             # Joints
-            joint_pos_robot=self._robot.data.joint_pos,
+            joint_pos_robot=self._robot.data.joint_pos.torch,
             joint_pos_limits_robot=(
-                self._robot.data.soft_joint_pos_limits
-                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits))
+                self._robot.data.soft_joint_pos_limits.torch
+                if torch.all(torch.isfinite(self._robot.data.soft_joint_pos_limits.torch))
                 else None
             ),
-            joint_pos_end_effector=self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            joint_pos_end_effector=self._end_effector.data.joint_pos.torch
+            if isinstance(self._end_effector, BaseArticulation)
             else None,
             joint_pos_limits_end_effector=(
-                self._end_effector.data.soft_joint_pos_limits
-                if isinstance(self._end_effector, Articulation)
+                self._end_effector.data.soft_joint_pos_limits.torch
+                if isinstance(self._end_effector, BaseArticulation)
                 and torch.all(
-                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits)
+                    torch.isfinite(self._end_effector.data.soft_joint_pos_limits.torch)
                 )
                 else None
             ),
-            joint_acc_robot=self._robot.data.joint_acc,
-            joint_applied_torque_robot=self._robot.data.applied_torque,
+            joint_acc_robot=self._robot.data.joint_acc.torch,
+            joint_applied_torque_robot=self._robot.actuators.applied_effort.torch,
             # Kinematics
-            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source[:, 0, :],
-            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source[:, 0, :],
+            fk_pos_end_effector=self._tf_end_effector.data.target_pos_source.torch[:, 0, :],
+            fk_quat_end_effector=self._tf_end_effector.data.target_quat_source.torch[:, 0, :],
             # Transforms (world frame)
-            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w[:, 0, :],
-            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w[:, 0, :],
-            tf_pos_obj=self._obj.data.root_pos_w,
-            tf_quat_obj=self._obj.data.root_quat_w,
+            tf_pos_end_effector=self._tf_end_effector.data.target_pos_w.torch[:, 0, :],
+            tf_quat_end_effector=self._tf_end_effector.data.target_quat_w.torch[:, 0, :],
+            tf_pos_obj=self._obj.data.root_pos_w.torch,
+            tf_quat_obj=self._obj.data.root_quat_w.torch,
             tf_pos_target=self._tf_pos_target,
             tf_quat_target=self._tf_quat_target,
             # Object velocity
-            vel_ang_obj=self._obj.data.root_ang_vel_w,
+            vel_ang_obj=self._obj.data.root_ang_vel_w.torch,
             # Contacts
-            contact_forces_robot=self._contacts_robot.data.net_forces_w,  # type: ignore
-            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_forces_robot=self._contacts_robot.data.net_forces_w.torch,  # type: ignore
+            contact_forces_end_effector=self._contacts_end_effector.data.net_forces_w.torch
+            if self._contacts_end_effector is not None
             else None,
-            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w
-            if isinstance(self._contacts_end_effector, ContactSensor)
+            contact_force_matrix_end_effector=self._contacts_end_effector.data.force_matrix_w.torch
+            if self._contacts_end_effector is not None
             else None,
             ## Bolt descriptors
             offset_pos_bolt_driver_slot=self._offset_pos_bolt_driver_slot,

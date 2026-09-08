@@ -1,127 +1,78 @@
-# Note: This file patches the ContactSensor class to support `filter_prim_paths_expr` at any level of the hierarchy
+"""Isaac Lab 3 contact-sensor compatibility for hierarchical filter paths.
 
-import isaaclab.sim as sim_utils
-import omni.physics.tensors as physx
-import torch
-from isaaclab.sensors import ContactSensor, ContactSensorCfg  # noqa: F401
-from pxr import UsdPhysics
+Isaac Lab 2.x exposed a concrete ``ContactSensor`` class, so SRB previously
+overrode its initializer directly. In 3.x that symbol is a backend factory; the
+PhysX implementation must be patched instead. The backend is imported lazily so
+configuration modules can load before the Kit application starts.
+"""
 
-from srb.core.sensor import SensorBase
+from isaaclab.sensors import ContactSensor, ContactSensorCfg
 
-from pxr import PhysxSchema  # isort: skip
+__all__ = ["ContactSensor", "ContactSensorCfg"]
 
 
-def __initialize_impl(self):
-    SensorBase._initialize_impl(self)
-    # create simulation view
-    self._physics_sim_view = physx.create_simulation_view(self._backend)
-    self._physics_sim_view.set_subspace_roots("/")
-    # check that only rigid bodies are selected
-    leaf_pattern = self.cfg.prim_path.rsplit("/", 1)[-1]
-    template_prim_path = self._parent_prims[0].GetPath().pathString
-    body_names = []
-    for prim in sim_utils.find_matching_prims(template_prim_path + "/" + leaf_pattern):
-        # check if prim has contact reporter API
-        if prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
-            prim_path = prim.GetPath().pathString
-            body_names.append(prim_path.rsplit("/", 1)[-1])
-    # check that there is at least one body with contact reporter API
-    if not body_names:
-        raise RuntimeError(
-            f"Sensor at path '{self.cfg.prim_path}' could not find any bodies with contact reporter API."
-            "\nHINT: Make sure to enable 'activate_contact_sensors' in the corresponding asset spawn configuration."
+def _install_physx_nested_filter_patch() -> None:
+    """Patch the PhysX backend only when the factory selects it at runtime."""
+    from isaaclab.sim.utils import enable_extension
+    from isaaclab.sim.utils.queries import resolve_matching_prims_from_source
+    from pxr import PhysxSchema, UsdPhysics
+
+    enable_extension("omni.physx.tensors")
+    from isaaclab_physx.sensors.contact_sensor import (
+        ContactSensor as physx_contact_sensor,
+    )
+
+    def is_collision_prim(prim) -> bool:
+        return prim.HasAPI(UsdPhysics.CollisionAPI) or prim.HasAPI(
+            PhysxSchema.PhysxCollisionAPI
         )
 
-    # construct regex expression for the body names
-    body_names_regex = r"(" + "|".join(body_names) + r")"
-    body_names_regex = f"{self.cfg.prim_path.rsplit('/', 1)[0]}/{body_names_regex}"
-    # convert regex expressions to glob expressions for PhysX
-    body_names_glob = body_names_regex.replace(".*", "*")
-
-    ### PATCH BEGINS HERE ###
-    # filter_prim_paths_glob = [
-    #     expr.replace(".*", "*") for expr in self.cfg.filter_prim_paths_expr
-    # ]
-    filter_prim_paths_glob = []
-    for expr in self.cfg.filter_prim_paths_expr:
-        queue = sim_utils.find_matching_prims(
-            expr.replace(".*", "*").replace("/World/envs/env_*", "/World/envs/env_0")
-        )
-        while queue:
-            child_prim = queue.pop(0)
-            if child_prim.HasAPI(
-                UsdPhysics.CollisionAPI  # type: ignore
-            ) or child_prim.HasAPI(PhysxSchema.PhysxCollisionAPI):
-                filter_prim_paths_glob.append(child_prim.GetPath().pathString)
+    def expand_filter_prim_paths(filter_prim_paths_expr: list[str]) -> list[str]:
+        """Resolve each filter root to collision bodies while preserving clone expressions."""
+        expanded_paths: list[str] = []
+        for path_expr in filter_prim_paths_expr:
+            matches = resolve_matching_prims_from_source(
+                path_expr,
+                predicate=is_collision_prim,
+                raise_if_no_matches=False,
+                traverse_instance_prims=False,
+            )
+            if matches:
+                expanded_paths.extend(
+                    destination_expr for _, destination_expr in matches
+                )
             else:
-                queue.extend(child_prim.GetChildren())
-    if not filter_prim_paths_glob:
-        filter_prim_paths_glob = [
-            expr.replace(".*", "*") for expr in self.cfg.filter_prim_paths_expr
-        ]
-    ### PATCH ENDS HERE ###
+                # Keep the original expression so Isaac Lab emits its usual diagnostic
+                # for a bad user-supplied filter path.
+                expanded_paths.append(path_expr)
+        return list(dict.fromkeys(expanded_paths))
 
-    # create a rigid prim view for the sensor
-    self._body_physx_view = self._physics_sim_view.create_rigid_body_view(
-        body_names_glob
-    )
-    self._contact_physx_view = self._physics_sim_view.create_rigid_contact_view(
-        body_names_glob, filter_patterns=filter_prim_paths_glob
-    )
-    # resolve the true count of bodies
-    self._num_bodies = self.body_physx_view.count // self._num_envs
-    # check that contact reporter succeeded
-    if self._num_bodies != len(body_names):
-        raise RuntimeError(
-            "Failed to initialize contact reporter for specified bodies."
-            f"\n\tInput prim path    : {self.cfg.prim_path}"
-            f"\n\tResolved prim paths: {body_names_regex}"
-        )
+    if getattr(physx_contact_sensor, "_srb_nested_filter_patch", False):
+        return
 
-    # prepare data buffers
-    self._data.net_forces_w = torch.zeros(
-        self._num_envs, self._num_bodies, 3, device=self._device
-    )
-    # optional buffers
-    # -- history of net forces
-    if self.cfg.history_length > 0:
-        self._data.net_forces_w_history = torch.zeros(
-            self._num_envs,
-            self.cfg.history_length,
-            self._num_bodies,
-            3,
-            device=self._device,
-        )
-    else:
-        self._data.net_forces_w_history = self._data.net_forces_w.unsqueeze(1)
-    # -- pose of sensor origins
-    if self.cfg.track_pose:
-        self._data.pos_w = torch.zeros(
-            self._num_envs, self._num_bodies, 3, device=self._device
-        )
-        self._data.quat_w = torch.zeros(
-            self._num_envs, self._num_bodies, 4, device=self._device
-        )
-    # -- air/contact time between contacts
-    if self.cfg.track_air_time:
-        self._data.last_air_time = torch.zeros(
-            self._num_envs, self._num_bodies, device=self._device
-        )
-        self._data.current_air_time = torch.zeros(
-            self._num_envs, self._num_bodies, device=self._device
-        )
-        self._data.last_contact_time = torch.zeros(
-            self._num_envs, self._num_bodies, device=self._device
-        )
-        self._data.current_contact_time = torch.zeros(
-            self._num_envs, self._num_bodies, device=self._device
-        )
-    # force matrix: (num_envs, num_bodies, num_filter_shapes, 3)
-    if len(self.cfg.filter_prim_paths_expr) != 0:
-        num_filters = self.contact_physx_view.filter_count
-        self._data.force_matrix_w = torch.zeros(
-            self._num_envs, self._num_bodies, num_filters, 3, device=self._device
-        )
+    original_initialize = physx_contact_sensor._initialize_impl
+
+    def initialize_physx_with_nested_filters(self) -> None:
+        if self.cfg.filter_prim_paths_expr:
+            self.cfg.filter_prim_paths_expr = expand_filter_prim_paths(
+                self.cfg.filter_prim_paths_expr
+            )
+        original_initialize(self)
+
+    physx_contact_sensor._initialize_impl = initialize_physx_with_nested_filters
+    physx_contact_sensor._srb_nested_filter_patch = True
 
 
-ContactSensor._initialize_impl = __initialize_impl
+# ``InteractiveScene`` instantiates the factory stored in ContactSensorCfg. Wrap
+# its resolver so the backend patch is installed immediately before PhysX is
+# imported, while retaining the stock factory for all other backends.
+if not getattr(ContactSensor, "_srb_resolve_class_patch", False):
+    _ORIGINAL_RESOLVE_CLASS = ContactSensor.resolve_class.__func__
+
+    def _resolve_class_with_physx_patch(cls, *args, **kwargs):
+        if cls._get_backend(*args, **kwargs) == "physx":
+            _install_physx_nested_filter_patch()
+        return _ORIGINAL_RESOLVE_CLASS(cls, *args, **kwargs)
+
+    ContactSensor.resolve_class = classmethod(_resolve_class_with_physx_patch)
+    ContactSensor._srb_resolve_class_patch = True

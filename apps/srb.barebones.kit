@@ -8,8 +8,15 @@ keywords = ["benchmark", "robotics", "simulation", "space"]
 [dependencies]
 ## Barebones
 "omni.kit.loop-isaac" = {}
-"isaacsim.core.api" = {}
-"isaacsim.core.cloner" = {}
+"omni.physics" = {}
+"omni.physics.physx" = {}
+"omni.physics.stageupdate" = {}
+"omni.physx" = {}
+"omni.physx.tensors" = {}
+"isaacsim.core.version" = {}
+"isaacsim.simulation_app" = {}
+"isaacsim.storage.native" = {}
+"omni.usd.schema.mujoco" = {}
 
 
 [settings]
@@ -23,7 +30,6 @@ app.exts.folders = [
     "${exe-path}/../isaacsim/exts",
     "${exe-path}/../isaacsim/extscache",
     "${exe-path}/../isaacsim/extsPhysics",
-    "${exe-path}/../extsDeprecated",
 ]
 
 ## Name
@@ -63,7 +69,7 @@ renderer.multiGpu.maxGpuCount = 1
 rtx-transient.dlssg.enabled = true
 rtx-transient.resourcemanager.enableTextureStreaming = true
 rtx.hydra.enableSemanticSchema = true
-rtx.mdltranslator.mdlDistilling = false
+rtx.mdltranslator.mdlDistilling = true
 rtx.newDenoiser.enabled = false
 rtx.pathtracing.optixDenoiser.enabled = false
 rtx.post.aa.op = 3 # 3 (DLSS) | 4 (DLAA)
