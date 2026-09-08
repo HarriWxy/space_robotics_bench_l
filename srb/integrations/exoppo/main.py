@@ -6,7 +6,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -194,6 +194,7 @@ def _write_run_manifest(
     wrapped_env: SrbExoPpoEnvWrapper,
     actor_observation_dim: int,
     critic_observation_dim: int,
+    physics_observation_dim: int | None = None,
     framework: str = FRAMEWORK_NAME,
 ) -> None:
     """Persist the resolved experiment contract next to TensorBoard events."""
@@ -211,6 +212,7 @@ def _write_run_manifest(
         "truncate_episodes",
         "is_finite_horizon",
         "include_gravity_magnitude",
+        "include_physics_context",
         "gravity_magnitude_reference",
     ):
         if env_cfg is not None and hasattr(env_cfg, name):
@@ -291,8 +293,12 @@ def _write_run_manifest(
             "critic_keys": list(wrapped_env.critic_keys)
             if wrapped_env.critic_keys is not None
             else None,
+            "physics_keys": list(getattr(wrapped_env, "physics_keys", ()))
+            if getattr(wrapped_env, "physics_keys", None) is not None
+            else None,
             "actor_dim": actor_observation_dim,
             "critic_dim": critic_observation_dim,
+            "physics_dim": physics_observation_dim,
         },
         "action": {
             "num_actions": wrapped_env.num_actions,
@@ -335,6 +341,7 @@ def _policy_sample(
     *,
     warm_start_time: float,
     stochastic: bool,
+    physics_context: torch.Tensor | None = None,
 ) -> Any:
     batch_size = observation.shape[0]
     if stochastic:
@@ -356,11 +363,36 @@ def _policy_sample(
     else:
         start = torch.zeros((batch_size, 1), dtype=torch.float32, device=trainer.device)
         flow_init = pure_noise
-    return trainer.policy.sample(
-        observation,
-        flow_init=flow_init,
-        flow_start=start,
-        deterministic=not stochastic,
+    kwargs: dict[str, Any] = {
+        "flow_init": flow_init,
+        "flow_start": start,
+        "deterministic": not stochastic,
+    }
+    if physics_context is not None:
+        kwargs["physics_context"] = physics_context
+    return trainer.policy.sample(observation, **kwargs)
+
+
+def _physics_bucket_ids(
+    physics_context: torch.Tensor,
+    *,
+    num_buckets: int,
+    context_index: int,
+    bin_edges: Sequence[float],
+) -> torch.Tensor:
+    """Assign fixed, reproducible bins to a per-transition context."""
+
+    if num_buckets <= 0:
+        raise ValueError("num_buckets must be positive")
+    if context_index < 0 or context_index >= physics_context.shape[1]:
+        raise ValueError("physics context index is outside the context dimension")
+    if len(bin_edges) != num_buckets - 1:
+        raise ValueError("bin_edges must contain num_buckets - 1 values")
+    boundaries = torch.as_tensor(
+        bin_edges, dtype=physics_context.dtype, device=physics_context.device
+    )
+    return torch.bucketize(physics_context[:, context_index], boundaries).to(
+        dtype=torch.long
     )
 
 
@@ -420,10 +452,43 @@ def _train_torch_ppo_replay(trainer: Any, replay: Any) -> dict[str, float]:
     metric_count = 0
     sample_count = len(replay)
     stop_early = False
+    replay_stats = {
+        "replay_physics_active_buckets": 0.0,
+        "replay_physics_stratified_effective": 0.0,
+        "replay_physics_replacement_fraction": 0.0,
+    }
     for _ in range(trainer.config.update_epochs):
-        order = torch.randperm(sample_count, device=trainer.device)
+        if getattr(trainer.config, "physics_stratified_replay", False):
+            order, sampling_stats = replay.stratified_order(
+                batch_size=trainer.config.batch_size,
+                num_buckets=trainer.config.physics_num_buckets,
+                context_index=trainer.config.physics_context_index,
+                bin_edges=trainer.config.physics_bin_edges,
+            )
+            replay_stats = {
+                "replay_physics_active_buckets": sampling_stats.get(
+                    "active_buckets", 0.0
+                ),
+                "replay_physics_stratified_effective": sampling_stats.get(
+                    "stratified_effective", 0.0
+                ),
+                "replay_physics_replacement_fraction": sampling_stats.get(
+                    "replacement_fraction", 0.0
+                ),
+                "replay_physics_age_rollouts_mean": sampling_stats.get(
+                    "age_rollouts_mean", 0.0
+                ),
+                "replay_physics_age_rollouts_max": sampling_stats.get(
+                    "age_rollouts_max", 0.0
+                ),
+            }
+        else:
+            order = torch.randperm(sample_count, device=trainer.device)
         for offset in range(0, sample_count, trainer.config.batch_size):
             indices = order[offset : offset + trainer.config.batch_size]
+            physics_context = tensors.get("physics_contexts")
+            if physics_context is not None:
+                physics_context = physics_context[indices]
             actor_metrics = trainer.actor_train_step(
                 tensors["actor_observations"][indices],
                 tensors["pre_tanh_actions"][indices],
@@ -431,6 +496,7 @@ def _train_torch_ppo_replay(trainer: Any, replay: Any) -> dict[str, float]:
                 tensors["flow_start"][indices],
                 tensors["behavior_log_prob"][indices],
                 tensors["advantages"][indices],
+                physics_context=physics_context,
             )
             critic_metrics = trainer.critic_train_step(
                 tensors["critic_observations"][indices],
@@ -462,6 +528,7 @@ def _train_torch_ppo_replay(trainer: Any, replay: Any) -> dict[str, float]:
     )
     averaged["early_stop"] = float(stop_early)
     averaged["minibatches"] = float(metric_count)
+    averaged.update(replay_stats)
     return averaged
 
 
@@ -472,6 +539,7 @@ def _collect_rollout(
     trainer: Any,
     actor_observation: torch.Tensor,
     critic_observation: torch.Tensor,
+    physics_observation: torch.Tensor | None,
     actor_stats: Any,
     critic_stats: Any,
     empirical_normalization: bool,
@@ -482,9 +550,23 @@ def _collect_rollout(
     episode_lengths: torch.Tensor,
     flatten_rollout: Any,
     compute_gae: Any,
-) -> tuple[Any | None, torch.Tensor, torch.Tensor, dict[str, float], int]:
+    collection_iteration: int = 0,
+    physics_num_buckets: int = 0,
+    physics_context_index: int = 0,
+    physics_bin_edges: Sequence[float] = (),
+) -> tuple[
+    Any | None,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    dict[str, float],
+    int,
+]:
     actor_observations: list[torch.Tensor] = []
     critic_observations: list[torch.Tensor] = []
+    physics_observations: list[torch.Tensor] = []
+    physics_bucket_ids: list[torch.Tensor] = []
+    collection_iterations: list[torch.Tensor] = []
     pre_tanh_actions: list[torch.Tensor] = []
     flow_initializations: list[torch.Tensor] = []
     flow_start_times: list[torch.Tensor] = []
@@ -516,16 +598,18 @@ def _collect_rollout(
                 has_previous_action,
                 warm_start_time=trainer.config.warm_start_time,
                 stochastic=True,
+                physics_context=physics_observation,
             )
             value = trainer.value(critic_observation)
             (
                 next_raw_actor,
                 next_raw_critic,
+                next_physics,
                 reward,
                 terminated,
                 truncated,
                 extras,
-            ) = wrapped_env.step(sample.pre_tanh_action)
+            ) = wrapped_env.step_with_physics(sample.pre_tanh_action)
             next_actor = _normalize(
                 next_raw_actor,
                 actor_stats,
@@ -582,9 +666,11 @@ def _collect_rollout(
                 # When compute_final_obs is supported, the exact terminal value below
                 # replaces it for every truncated environment.
                 next_value = torch.where(truncated, value, next_value)
-                final_observations = wrapped_env.final_observations(extras)
+                final_observations = wrapped_env.final_observations_with_physics(
+                    extras
+                )
                 if final_observations is not None:
-                    _, final_raw_critic = final_observations
+                    _, final_raw_critic, _ = final_observations
                     final_critic = _normalize(
                         final_raw_critic,
                         critic_stats,
@@ -597,6 +683,28 @@ def _collect_rollout(
 
         actor_observations.append(actor_observation)
         critic_observations.append(critic_observation)
+        if physics_observation is not None:
+            effective_num_buckets = max(physics_num_buckets, 1)
+            effective_bin_edges = (
+                tuple(physics_bin_edges) if effective_num_buckets > 1 else ()
+            )
+            physics_observations.append(physics_observation)
+            physics_bucket_ids.append(
+                _physics_bucket_ids(
+                    physics_observation,
+                    num_buckets=effective_num_buckets,
+                    context_index=physics_context_index,
+                    bin_edges=effective_bin_edges,
+                )
+            )
+            collection_iterations.append(
+                torch.full(
+                    (wrapped_env.num_envs,),
+                    collection_iteration,
+                    dtype=torch.long,
+                    device=trainer.device,
+                )
+            )
         pre_tanh_actions.append(sample.pre_tanh_action)
         flow_initializations.append(sample.flow_init)
         flow_start_times.append(sample.flow_start)
@@ -623,10 +731,11 @@ def _collect_rollout(
         has_previous_action[done] = False
         actor_observation = next_actor
         critic_observation = next_critic
+        physics_observation = next_physics
 
     step_count = len(rewards)
     if step_count == 0:
-        return None, actor_observation, critic_observation, {}, 0
+        return None, actor_observation, critic_observation, physics_observation, {}, 0
 
     reward_tensor = torch.stack(rewards)
     terminated_tensor = torch.stack(terminated_values)
@@ -652,6 +761,15 @@ def _collect_rollout(
         torch.stack(behavior_log_probs),
         advantages,
         returns,
+        physics_contexts=(
+            torch.stack(physics_observations) if physics_observations else None
+        ),
+        physics_bucket_ids=(
+            torch.stack(physics_bucket_ids) if physics_bucket_ids else None
+        ),
+        collection_iterations=(
+            torch.stack(collection_iterations) if collection_iterations else None
+        ),
     )
     count = float(completed_count.cpu())
     metrics: dict[str, float] = {}
@@ -693,7 +811,14 @@ def _collect_rollout(
             float(episode_event_sums.get("episode_duration_s", event_zero).cpu())
             / completed
         )
-    return rollout, actor_observation, critic_observation, metrics, step_count
+    return (
+        rollout,
+        actor_observation,
+        critic_observation,
+        physics_observation,
+        metrics,
+        step_count,
+    )
 
 
 def _checkpoint_payload(
@@ -723,6 +848,13 @@ def _checkpoint_payload(
         "observation_dims": {
             "actor": getattr(trainer.policy, "obs_dim", None),
             "critic": getattr(trainer, "critic_obs_dim", None),
+            "physics": getattr(trainer, "physics_dim", 0),
+        },
+        "policy_architecture": {
+            "physics_film": bool(getattr(trainer.policy, "physics_film", False)),
+            "physics_embed_dim": int(
+                getattr(trainer.policy, "physics_embed_dim", 0)
+            ),
         },
         "config": asdict(trainer.config),
     }
@@ -780,6 +912,7 @@ def _load_checkpoint(
         current_dims = {
             "actor": getattr(trainer.policy, "obs_dim", None),
             "critic": getattr(trainer, "critic_obs_dim", None),
+            "physics": getattr(trainer, "physics_dim", 0),
         }
         mismatches = {
             name: (saved_dims.get(name), current_dims[name])
@@ -792,6 +925,37 @@ def _load_checkpoint(
             raise ValueError(
                 "Checkpoint observation dimensions do not match the current "
                 f"contract: {mismatches}"
+            )
+        if current_dims["physics"] and "physics" not in saved_dims:
+            raise ValueError(
+                "The checkpoint has no physics observation contract but the "
+                "current policy requires a physics context."
+            )
+    saved_architecture = checkpoint.get("policy_architecture")
+    if bool(getattr(trainer.policy, "physics_film", False)) and not isinstance(
+        saved_architecture, Mapping
+    ):
+        raise ValueError(
+            "The checkpoint has no FiLM policy architecture metadata; refusing "
+            "to load it into a physics-conditioned policy."
+        )
+    if isinstance(saved_architecture, Mapping):
+        current_architecture = {
+            "physics_film": bool(getattr(trainer.policy, "physics_film", False)),
+            "physics_embed_dim": int(
+                getattr(trainer.policy, "physics_embed_dim", 0)
+            ),
+        }
+        architecture_mismatches = {
+            name: (saved_architecture.get(name), current_architecture[name])
+            for name in current_architecture
+            if name in saved_architecture
+            and saved_architecture[name] != current_architecture[name]
+        }
+        if architecture_mismatches:
+            raise ValueError(
+                "Checkpoint policy architecture does not match the current "
+                f"contract: {architecture_mismatches}"
             )
     trainer.policy.load_state_dict(checkpoint["policy"])
     trainer.value.load_state_dict(checkpoint["value"])
@@ -864,7 +1028,7 @@ def _train(
             "observation_clip, save_interval, and log_interval must be positive"
         )
 
-    raw_actor, raw_critic, _ = wrapped_env.reset()
+    raw_actor, raw_critic, raw_physics, _ = wrapped_env.reset_with_physics()
     actor_stats = normalizer_class((raw_actor.shape[1],), device=wrapped_env.device)
     critic_stats = normalizer_class((raw_critic.shape[1],), device=wrapped_env.device)
     start_iteration = 0
@@ -894,6 +1058,7 @@ def _train(
         clip=observation_clip,
         update=True,
     )
+    physics_observation = raw_physics
     if bool(raw_cfg.get("randomize_reset_episode_progress", True)):
         wrapped_env.episode_length_buf.random_(0, wrapped_env.max_episode_length)
 
@@ -932,6 +1097,9 @@ def _train(
             "config/warmup_rollouts": trainer.config.warmup_rollouts,
             "config/gamma": trainer.config.gamma,
             "config/gae_lambda": trainer.config.gae_lambda,
+            "config/physics_dim": int(physics_observation.shape[1])
+            if physics_observation is not None
+            else 0,
         },
         step=0,
     )
@@ -942,6 +1110,7 @@ def _train(
                 rollout,
                 actor_observation,
                 critic_observation,
+                physics_observation,
                 metrics,
                 collected_steps,
             ) = _collect_rollout(
@@ -950,6 +1119,7 @@ def _train(
                 trainer=trainer,
                 actor_observation=actor_observation,
                 critic_observation=critic_observation,
+                physics_observation=physics_observation,
                 actor_stats=actor_stats,
                 critic_stats=critic_stats,
                 empirical_normalization=empirical_normalization,
@@ -960,6 +1130,16 @@ def _train(
                 episode_lengths=episode_lengths,
                 flatten_rollout=flatten_rollout,
                 compute_gae=compute_gae,
+                collection_iteration=iteration,
+                physics_num_buckets=int(
+                    getattr(trainer.config, "physics_num_buckets", 0)
+                ),
+                physics_context_index=int(
+                    getattr(trainer.config, "physics_context_index", 0)
+                ),
+                physics_bin_edges=tuple(
+                    getattr(trainer.config, "physics_bin_edges", ())
+                ),
             )
             if rollout is None:
                 break
@@ -1043,7 +1223,7 @@ def _evaluate(
     if eval_steps < 0:
         raise ValueError("eval_steps cannot be negative")
 
-    raw_actor, raw_critic, _ = wrapped_env.reset()
+    raw_actor, raw_critic, raw_physics, _ = wrapped_env.reset_with_physics()
     actor_stats = normalizer_class((raw_actor.shape[1],), device=wrapped_env.device)
     critic_stats = normalizer_class((raw_critic.shape[1],), device=wrapped_env.device)
     if checkpoint is not None:
@@ -1063,6 +1243,7 @@ def _evaluate(
         clip=observation_clip,
         update=False,
     )
+    physics_observation = raw_physics
     previous_action = torch.zeros(
         (wrapped_env.num_envs, wrapped_env.num_actions),
         dtype=torch.float32,
@@ -1098,15 +1279,17 @@ def _evaluate(
                     has_previous_action,
                     warm_start_time=trainer.config.warm_start_time,
                     stochastic=stochastic,
+                    physics_context=physics_observation,
                 )
                 (
                     raw_actor,
                     _,
+                    physics_observation,
                     reward,
                     terminated,
                     truncated,
                     extras,
-                ) = wrapped_env.step(sample.pre_tanh_action)
+                ) = wrapped_env.step_with_physics(sample.pre_tanh_action)
                 actor_observation = _normalize(
                     raw_actor,
                     actor_stats,
@@ -1249,6 +1432,7 @@ def run(
         env,
         actor_keys=obs_cfg.get("actor_keys"),
         critic_keys=obs_cfg.get("critic_keys"),
+        physics_keys=obs_cfg.get("physics_keys"),
         validate=bool(raw_cfg.get("validate", True)),
     )
     flow_config, max_iterations = _build_flow_config(
@@ -1266,7 +1450,13 @@ def run(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(flow_config.seed)
 
-    initial_actor, initial_critic, _ = wrapped_env.reset()
+    initial_actor, initial_critic, initial_physics, _ = wrapped_env.reset_with_physics()
+    physics_dim = int(initial_physics.shape[1]) if initial_physics is not None else 0
+    if bool(getattr(flow_config, "physics_film", False)) and physics_dim <= 0:
+        raise ValueError(
+            "physics_film=True requires agent.obs.physics_keys and a "
+            "physics observation"
+        )
     if objective not in ("exo", "ppo"):
         raise ValueError(f"Unsupported ExO-PPO objective {objective!r}")
     if objective == "ppo":
@@ -1286,6 +1476,7 @@ def run(
             obs_dim=int(initial_actor.shape[1]),
             action_dim=wrapped_env.num_actions,
             device=wrapped_env.device,
+            physics_dim=physics_dim,
         )
         trainer.critic_obs_dim = int(initial_critic.shape[1])
         algorithm_name = "Flow-PPO"
@@ -1296,6 +1487,7 @@ def run(
             action_dim=wrapped_env.num_actions,
             critic_obs_dim=int(initial_critic.shape[1]),
             device=wrapped_env.device,
+            physics_dim=physics_dim,
         )
         algorithm_name = "ExO-PPO"
     if workflow == "train":
@@ -1310,6 +1502,7 @@ def run(
             wrapped_env=wrapped_env,
             actor_observation_dim=int(initial_actor.shape[1]),
             critic_observation_dim=int(initial_critic.shape[1]),
+            physics_observation_dim=physics_dim,
         )
     checkpoint = _resolve_checkpoint(
         workflow=workflow,

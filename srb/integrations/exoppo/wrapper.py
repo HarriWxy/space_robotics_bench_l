@@ -18,6 +18,7 @@ class SrbExoPpoEnvWrapper:
         *,
         actor_keys: Sequence[str] | None = None,
         critic_keys: Sequence[str] | None = None,
+        physics_keys: Sequence[str] | None = None,
         validate: bool = True,
     ) -> None:
         self.env = env
@@ -28,6 +29,7 @@ class SrbExoPpoEnvWrapper:
         self.num_envs = int(self.unwrapped.num_envs)
         self.actor_keys = tuple(actor_keys) if actor_keys else None
         self.critic_keys = tuple(critic_keys) if critic_keys else None
+        self.physics_keys = tuple(physics_keys) if physics_keys else None
         self.validate = bool(validate)
         self._validated = False
 
@@ -118,10 +120,10 @@ class SrbExoPpoEnvWrapper:
             dim=-1,
         )
 
-    def encode_observations(
+    def _encode_actor_critic(
         self, observations: Mapping[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Flatten configured SRB observation categories without host copies."""
+        """Flatten actor and critic categories without host copies."""
 
         if not isinstance(observations, Mapping):
             raise TypeError(
@@ -155,12 +157,37 @@ class SrbExoPpoEnvWrapper:
         else:
             critic = self._concat(observations, self.critic_keys, name="critic")
 
+        return actor, critic
+
+    def encode_observations_with_physics(
+        self, observations: Mapping[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Return actor, critic, and a separate physics context tensor.
+
+        Physics context is deliberately not concatenated into the actor input;
+        FiLM policies consume it through a separate conditioning path.  The
+        old :meth:`encode_observations` API remains unchanged for baselines.
+        """
+
+        actor, critic = self._encode_actor_critic(observations)
+        physics = None
+        if self.physics_keys is not None:
+            physics = self._concat(observations, self.physics_keys, name="physics")
         if self.validate and not self._validated:
-            if not torch.isfinite(actor).all() or not torch.isfinite(critic).all():
+            values = (actor, critic) if physics is None else (actor, critic, physics)
+            if not all(torch.isfinite(value).all() for value in values):
                 raise FloatingPointError(
                     "Non-finite observation reached the ExO-PPO adapter"
                 )
             self._validated = True
+        return actor, critic, physics
+
+    def encode_observations(
+        self, observations: Mapping[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Flatten configured actor and critic observations."""
+
+        actor, critic, _ = self.encode_observations_with_physics(observations)
         return actor, critic
 
     @staticmethod
@@ -196,9 +223,25 @@ class SrbExoPpoEnvWrapper:
         return self.action_center + self.action_scale * torch.tanh(pre_tanh_action)
 
     def reset(self) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        actor, critic, _, info = self.reset_with_physics()
+        return actor, critic, info
+
+    def reset_with_physics(
+        self,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        dict[str, Any],
+    ]:
         observations, info = self.env.reset()
-        actor, critic = self.encode_observations(observations)
-        return actor, critic, dict(info) if isinstance(info, Mapping) else {}
+        actor, critic, physics = self.encode_observations_with_physics(observations)
+        return (
+            actor,
+            critic,
+            physics,
+            dict(info) if isinstance(info, Mapping) else {},
+        )
 
     def step(
         self, pre_tanh_action: torch.Tensor
@@ -210,9 +253,31 @@ class SrbExoPpoEnvWrapper:
         torch.Tensor,
         dict[str, Any],
     ]:
+        (
+            actor,
+            critic,
+            _,
+            reward,
+            terminated,
+            truncated,
+            extras,
+        ) = self.step_with_physics(pre_tanh_action)
+        return actor, critic, reward, terminated, truncated, extras
+
+    def step_with_physics(
+        self, pre_tanh_action: torch.Tensor
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        dict[str, Any],
+    ]:
         env_action = self.action_from_pre_tanh(pre_tanh_action)
         observations, reward, terminated, truncated, info = self.env.step(env_action)
-        actor, critic = self.encode_observations(observations)
+        actor, critic, physics = self.encode_observations_with_physics(observations)
         reward = self._vector(
             reward,
             num_envs=self.num_envs,
@@ -235,17 +300,28 @@ class SrbExoPpoEnvWrapper:
             name="truncated",
         )
         extras = dict(info) if isinstance(info, Mapping) else {}
-        return actor, critic, reward, terminated, truncated, extras
+        return actor, critic, physics, reward, terminated, truncated, extras
 
     def final_observations(
         self, extras: Mapping[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Encode Isaac Lab's pre-reset terminal observation when available."""
 
+        encoded = self.final_observations_with_physics(extras)
+        if encoded is None:
+            return None
+        actor, critic, _ = encoded
+        return actor, critic
+
+    def final_observations_with_physics(
+        self, extras: Mapping[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None] | None:
+        """Encode terminal observations and preserve their physics context."""
+
         final_obs = extras.get("final_obs")
         if not isinstance(final_obs, Mapping):
             return None
-        return self.encode_observations(final_obs)
+        return self.encode_observations_with_physics(final_obs)
 
     @property
     def max_episode_length(self) -> int:

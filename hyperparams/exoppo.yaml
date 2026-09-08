@@ -23,6 +23,16 @@ validate: true
 obs:
   actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
+  physics_keys: null
+
+# FiLM/replay fields stay disabled for the existing PC-Concat baseline.  A
+# FiLM run overrides these fields and enables env.include_physics_context.
+physics_film: false
+physics_embed_dim: 32
+physics_stratified_replay: false
+physics_num_buckets: 0
+physics_context_index: 0
+physics_bin_edges: []
 
 smoothing:
   enabled: false

@@ -32,6 +32,7 @@ class _DummySrbEnv:
             "state": torch.tensor([[1.0, 2.0], [3.0, 4.0]]) + offset,
             "proprio": torch.tensor([[5.0], [6.0]]) + offset,
             "command": torch.tensor([[7.0], [8.0]]) + offset,
+            "physics": torch.tensor([[0.25], [0.5]]) + offset,
         }
 
     def reset(self):
@@ -72,6 +73,48 @@ def test_wrapper_keeps_flow_variables_separate_from_bounded_action() -> None:
     assert torch.equal(final_actor, final_critic)
 
 
+def test_wrapper_keeps_physics_context_out_of_actor_input() -> None:
+    env = _DummySrbEnv()
+    wrapper = SrbExoPpoEnvWrapper(
+        env,
+        actor_keys=("state", "proprio", "command"),
+        physics_keys=("physics",),
+    )
+    actor, critic, physics, _ = wrapper.reset_with_physics()
+    assert actor.shape == (2, 4)
+    assert torch.equal(actor, critic)
+    assert physics is not None
+    assert physics.shape == (2, 1)
+    assert torch.equal(physics, torch.tensor([[0.25], [0.5]]))
+
+    _, _, next_physics, _, _, _, extras = wrapper.step_with_physics(
+        torch.zeros((2, 2))
+    )
+    assert next_physics is not None
+    assert torch.equal(next_physics, torch.tensor([[1.25], [1.5]]))
+    final_encoded = wrapper.final_observations_with_physics(extras)
+    assert final_encoded is not None
+    _, _, final_physics = final_encoded
+    assert final_physics is not None
+    assert torch.equal(final_physics, torch.tensor([[2.25], [2.5]]))
+
+
+def test_wrapper_reports_missing_physics_group() -> None:
+    env = _DummySrbEnv()
+    env.reset = lambda: ({"state": torch.zeros((2, 2))}, {})
+    wrapper = SrbExoPpoEnvWrapper(
+        env,
+        actor_keys=("state",),
+        physics_keys=("physics",),
+    )
+    try:
+        wrapper.reset_with_physics()
+    except KeyError as error:
+        assert "physics" in str(error)
+    else:
+        raise AssertionError("missing physics observation must raise KeyError")
+
+
 @dataclass
 class _ManifestFlowConfig:
     rollout_steps: int = 64
@@ -92,6 +135,7 @@ def test_run_manifest_records_resolved_gravity_schedule(tmp_path) -> None:
         gravity=None,
         num_envs=2,
         include_gravity_magnitude=True,
+        include_physics_context=False,
         gravity_magnitude_reference=9.80665,
         physics_conditioning=_PhysicsConditioning(),
         events=SimpleNamespace(
@@ -112,6 +156,7 @@ def test_run_manifest_records_resolved_gravity_schedule(tmp_path) -> None:
         num_envs=2,
         actor_keys=("proprio", "proprio_dyn", "command"),
         critic_keys=None,
+        physics_keys=None,
         num_actions=2,
         action_low=torch.tensor([[-1.0, -1.0]]),
         action_high=torch.tensor([[1.0, 1.0]]),
@@ -185,3 +230,24 @@ def test_physics_conditioned_launcher_enables_the_full_actor_contract() -> None:
         )
     )
     assert "env.include_gravity_magnitude=false" in no_context_argv
+
+
+def test_film_launcher_enables_separate_context_and_stratified_replay() -> None:
+    argv = build_srb_argv(
+        SimpleNamespace(
+            algo="exoppo",
+            seed=3,
+            num_envs=8,
+            iterations=11,
+            no_gravity_context=False,
+            conditioning="film",
+            stratified_replay=True,
+        )
+    )
+    assert "env.include_gravity_magnitude=false" in argv
+    assert "env.include_physics_context=true" in argv
+    assert "agent.obs.physics_keys=[physics]" in argv
+    assert "agent.physics_film=true" in argv
+    assert "agent.physics_stratified_replay=true" in argv
+    assert "env.physics_conditioning.schedule_mode=stratified_cycle" in argv
+    assert "env.physics_conditioning.gravity_interval_s=[2.56,2.56]" in argv

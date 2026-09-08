@@ -603,56 +603,109 @@ def randomize_usd_prim_attribute_uniform(
         )
 
 
-def randomize_gravity_uniform(
+def _set_global_gravity(
     env: "AnyEnv",
-    env_ids: torch.Tensor | None,
-    distribution_params: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
-):
-    from pxr import UsdPhysics  # noqa: PLC0415
+    gravity_direction: torch.Tensor,
+    gravity_magnitude: float,
+) -> None:
+    from pxr import UsdPhysics
 
     physics_scene = UsdPhysics.Scene.Get(env.sim.stage, env.sim.cfg.physics_prim_path)  # type: ignore
-    gravity = sample_uniform(
-        torch.tensor(distribution_params[0]),
-        torch.tensor(distribution_params[1]),
-        (3,),
-        device="cpu",
-    )
-    gravity_magnitude = torch.norm(gravity)
-    if gravity_magnitude == 0.0:
-        gravity_direction = gravity
+    direction = gravity_direction.detach().to(device="cpu", dtype=torch.float32)
+    direction_norm = torch.linalg.vector_norm(direction)
+    if float(direction_norm) == 0.0:
+        direction = torch.tensor((0.0, 0.0, -1.0), dtype=torch.float32)
     else:
-        gravity_direction = gravity / gravity_magnitude
-
-    gravity_value = float(gravity_magnitude.item())
+        direction = direction / direction_norm
     gravity_dir_attr = physics_scene.GetGravityDirectionAttr()
     if gravity_dir_attr is None:
-        physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction.tolist()))
+        physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*direction.tolist()))
     else:
-        gravity_dir_attr.Set(Gf.Vec3f(*gravity_direction.tolist()))
+        gravity_dir_attr.Set(Gf.Vec3f(*direction.tolist()))
     gravity_mag_attr = physics_scene.GetGravityMagnitudeAttr()
     if gravity_mag_attr is None:
-        physics_scene.CreateGravityMagnitudeAttr(gravity_value)
+        physics_scene.CreateGravityMagnitudeAttr(float(gravity_magnitude))
     else:
-        gravity_mag_attr.Set(gravity_value)
+        gravity_mag_attr.Set(float(gravity_magnitude))
 
     # Some tasks expose the runtime gravity magnitude as an observation.  Keep
     # that buffer synchronized with the global USD physics-scene randomization
     # without imposing a dependency on tasks that do not use it.
     unwrapped_env = getattr(env, "unwrapped", env)
     if getattr(unwrapped_env, "_tracks_gravity_magnitude", False):
-        unwrapped_env._gravity_magnitude_scalar = gravity_value  # type: ignore[attr-defined]
+        unwrapped_env._gravity_magnitude_scalar = float(  # type: ignore[attr-defined]
+            gravity_magnitude
+        )
         gravity_buffer = getattr(unwrapped_env, "_gravity_magnitude", None)
         if isinstance(gravity_buffer, torch.Tensor):
-            gravity_buffer.fill_(gravity_value)
+            gravity_buffer.fill_(float(gravity_magnitude))
         elif hasattr(unwrapped_env, "num_envs") and hasattr(
             unwrapped_env, "device"
         ):
             unwrapped_env._gravity_magnitude = torch.full(  # type: ignore[attr-defined]
                 (int(unwrapped_env.num_envs),),
-                gravity_value,
+                float(gravity_magnitude),
                 dtype=torch.float32,
                 device=unwrapped_env.device,
             )
+
+
+def randomize_gravity_uniform(
+    env: "AnyEnv",
+    env_ids: torch.Tensor | None,
+    distribution_params: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+):
+    del env_ids
+    gravity = sample_uniform(
+        torch.tensor(distribution_params[0]),
+        torch.tensor(distribution_params[1]),
+        (3,),
+        device="cpu",
+    )
+    gravity_magnitude = torch.linalg.vector_norm(gravity)
+    if float(gravity_magnitude) == 0.0:
+        gravity_direction = gravity
+    else:
+        gravity_direction = gravity / gravity_magnitude
+    _set_global_gravity(env, gravity_direction, float(gravity_magnitude))
+
+
+def randomize_gravity_stratified(
+    env: "AnyEnv",
+    env_ids: torch.Tensor | None,
+    distribution_params: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+    num_buckets: int,
+):
+    """Cycle global gravity through fixed magnitude buckets.
+
+    PhysX gravity is scene-global, so the bucket advances once per event for
+    the whole vectorized scene.  The current bucket is stored on the unwrapped
+    task and the sampled magnitude remains continuous inside that bucket.
+    """
+
+    del env_ids
+    if num_buckets < 2:
+        raise ValueError("num_buckets must be at least 2")
+    gravity_min = abs(float(distribution_params[0][2]))
+    gravity_max = abs(float(distribution_params[1][2]))
+    if gravity_max < gravity_min:
+        gravity_min, gravity_max = gravity_max, gravity_min
+    unwrapped_env = getattr(env, "unwrapped", env)
+    bucket_index = int(getattr(unwrapped_env, "_gravity_bucket_index", 0)) % num_buckets
+    bucket_width = (gravity_max - gravity_min) / float(num_buckets)
+    lower = gravity_min + bucket_index * bucket_width
+    upper = gravity_max if bucket_index == num_buckets - 1 else lower + bucket_width
+    magnitude = float(
+        sample_uniform(
+            torch.tensor(lower), torch.tensor(upper), (1,), device="cpu"
+        ).item()
+    )
+    _set_global_gravity(
+        env,
+        torch.tensor((0.0, 0.0, -1.0), dtype=torch.float32),
+        magnitude,
+    )
+    unwrapped_env._gravity_bucket_index = bucket_index + 1
 
 
 def follow_xform_orientation_linear_trajectory(

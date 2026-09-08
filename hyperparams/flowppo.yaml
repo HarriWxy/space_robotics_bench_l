@@ -24,6 +24,14 @@ obs:
   # scalar to ``proprio`` through the environment, not a special actor key.
   actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
+  physics_keys: null
+
+physics_film: false
+physics_embed_dim: 32
+physics_stratified_replay: false
+physics_num_buckets: 0
+physics_context_index: 0
+physics_bin_edges: []
 
 smoothing:
   enabled: false

@@ -11,6 +11,7 @@ from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import (
     push_by_setting_velocity,  # noqa: F401
+    randomize_gravity_stratified,
     randomize_gravity_uniform,
     reset_joints_by_scale,
 )
@@ -65,6 +66,10 @@ class PhysicsConditioningCfg:
 
     gravity_magnitude_range: tuple[float, float] | None = None
     gravity_interval_s: tuple[float, float] = (30.0, 30.0)
+    schedule_mode: Literal["interval_uniform", "stratified_cycle"] = (
+        "interval_uniform"
+    )
+    num_buckets: int = 4
 
 
 @configclass
@@ -297,6 +302,7 @@ class LocomotionTaskCfg(TaskCfg):
     # shape, while gravity-ablation runs can request a normalized magnitude in
     # the proprioception group.
     include_gravity_magnitude: bool = False
+    include_physics_context: bool = False
     gravity_magnitude_reference: float = 9.80665
 
     ## Time
@@ -418,13 +424,36 @@ class LocomotionTaskCfg(TaskCfg):
             raise ValueError("success_settle_time_s must be finite and non-negative.")
         if not 0.0 <= self.terminations.success_tracking_fraction <= 1.0:
             raise ValueError("success_tracking_fraction must be in [0, 1].")
-        if self.include_gravity_magnitude and (
+        if (
+            self.include_gravity_magnitude or self.include_physics_context
+        ) and (
             not isfinite(float(self.gravity_magnitude_reference))
             or self.gravity_magnitude_reference <= 0.0
         ):
             raise ValueError("gravity_magnitude_reference must be finite and positive.")
+        if self.include_gravity_magnitude and self.include_physics_context:
+            raise ValueError(
+                "Choose either include_gravity_magnitude (PC-Concat) or "
+                "include_physics_context (separate FiLM context)."
+            )
 
     def _validate_physics_conditioning(self) -> None:
+        if self.physics_conditioning.schedule_mode not in {
+            "interval_uniform",
+            "stratified_cycle",
+        }:
+            raise ValueError(
+                "physics_conditioning.schedule_mode must be interval_uniform "
+                "or stratified_cycle."
+            )
+        if (
+            self.physics_conditioning.schedule_mode == "stratified_cycle"
+            and self.physics_conditioning.num_buckets < 2
+        ):
+            raise ValueError(
+                "physics_conditioning.num_buckets must be at least 2 for "
+                "stratified_cycle."
+            )
         gravity_range = self.physics_conditioning.gravity_magnitude_range
         if gravity_range is None:
             return
@@ -478,21 +507,38 @@ class LocomotionTaskCfg(TaskCfg):
             (0.0, 0.0, -gravity_min),
             (0.0, 0.0, -gravity_max),
         )
+        if self.physics_conditioning.schedule_mode == "stratified_cycle":
+            gravity_func = randomize_gravity_stratified
+        else:
+            gravity_func = randomize_gravity_uniform
         gravity_event = self.events.randomize_gravity
         if gravity_event is None:
             self.events.randomize_gravity = EventTermCfg(
-                func=randomize_gravity_uniform,
+                func=gravity_func,
                 mode=mode,
                 is_global_time=True,
                 interval_range_s=interval_s,
-                params={"distribution_params": distribution_params},
+                params={
+                    "distribution_params": distribution_params,
+                    **(
+                        {"num_buckets": self.physics_conditioning.num_buckets}
+                        if self.physics_conditioning.schedule_mode
+                        == "stratified_cycle"
+                        else {}
+                    ),
+                },
             )
             return
 
+        gravity_event.func = gravity_func
         gravity_event.mode = mode
         gravity_event.is_global_time = True
         gravity_event.interval_range_s = interval_s
         gravity_event.params["distribution_params"] = distribution_params
+        if self.physics_conditioning.schedule_mode == "stratified_cycle":
+            gravity_event.params["num_buckets"] = self.physics_conditioning.num_buckets
+        else:
+            gravity_event.params.pop("num_buckets", None)
 
 
 ############
@@ -852,10 +898,21 @@ class LocomotionTask(Task):
             min_body_up_z=self.cfg.terminations.min_body_up_z,
         )
 
-        if self.cfg.include_gravity_magnitude:
-            step_return.observation["proprio"]["gravity_magnitude"] = (
+        if (
+            self.cfg.include_gravity_magnitude
+            or self.cfg.include_physics_context
+        ):
+            gravity_context = (
                 self._gravity_magnitude / self.cfg.gravity_magnitude_reference
             ).unsqueeze(-1)
+            if self.cfg.include_gravity_magnitude:
+                step_return.observation["proprio"]["gravity_magnitude"] = (
+                    gravity_context
+                )
+            if self.cfg.include_physics_context:
+                step_return.observation["physics"] = {
+                    "gravity_magnitude": gravity_context,
+                }
 
         tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
         body_up_z = tf_rotmat_robot[:, 2, 2]
