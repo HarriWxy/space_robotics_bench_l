@@ -18,6 +18,8 @@ randomize_reset_episode_progress: false
 validate: true
 
 # SRB observation mapping. A null critic_keys value reuses the actor input.
+# Physics-conditioned runs enable ``env.include_gravity_magnitude=true``;
+# the scalar then enters the actor through the ``proprio`` group below.
 obs:
   actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null

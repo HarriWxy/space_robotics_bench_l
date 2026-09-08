@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import gymnasium
 import torch
 
+from srb.integrations.exoppo.main import _write_run_manifest
 from srb.integrations.exoppo.wrapper import SrbExoPpoEnvWrapper
+from train_physics_conditioned_flow import build_srb_argv
 
 
 class _DummySrbEnv:
@@ -66,3 +70,118 @@ def test_wrapper_keeps_flow_variables_separate_from_bounded_action() -> None:
     final_actor, final_critic = wrapper.final_observations(extras)
     assert final_actor.shape == (2, 4)
     assert torch.equal(final_actor, final_critic)
+
+
+@dataclass
+class _ManifestFlowConfig:
+    rollout_steps: int = 64
+    replay_N: int = 4
+    warmup_rollouts: int = 4
+
+
+@dataclass
+class _PhysicsConditioning:
+    gravity_magnitude_range: tuple[float, float] = (1.62496, 3.72076)
+    gravity_interval_s: tuple[float, float] = (30.0, 30.0)
+
+
+def test_run_manifest_records_resolved_gravity_schedule(tmp_path) -> None:
+    env_cfg = SimpleNamespace(
+        seed=7,
+        domain="moon",
+        gravity=None,
+        num_envs=2,
+        include_gravity_magnitude=True,
+        gravity_magnitude_reference=9.80665,
+        physics_conditioning=_PhysicsConditioning(),
+        events=SimpleNamespace(
+            randomize_gravity=SimpleNamespace(
+                mode="interval",
+                is_global_time=True,
+                interval_range_s=(30.0, 30.0),
+                params={
+                    "distribution_params": (
+                        (0.0, 0.0, -1.62496),
+                        (0.0, 0.0, -3.72076),
+                    )
+                },
+            )
+        ),
+    )
+    wrapped_env = SimpleNamespace(
+        num_envs=2,
+        actor_keys=("proprio", "proprio_dyn", "command"),
+        critic_keys=None,
+        num_actions=2,
+        action_low=torch.tensor([[-1.0, -1.0]]),
+        action_high=torch.tensor([[1.0, 1.0]]),
+    )
+
+    _write_run_manifest(
+        logdir=tmp_path,
+        workflow="train",
+        algorithm="ExO-PPO",
+        env_id="srb/locomotion_velocity_tracking_c",
+        env_cfg=env_cfg,
+        raw_cfg={"seed": 7},
+        flow_config=_ManifestFlowConfig(),
+        wrapped_env=wrapped_env,
+        actor_observation_dim=37,
+        critic_observation_dim=37,
+    )
+
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+    environment = manifest["environment"]
+    assert environment["physics_conditioning"] == {
+        "gravity_interval_s": [30.0, 30.0],
+        "gravity_magnitude_range": [1.62496, 3.72076],
+    }
+    assert environment["gravity_randomization"] == {
+        "mode": "interval",
+        "is_global_time": True,
+        "interval_range_s": [30.0, 30.0],
+        "distribution_params": [
+            [0.0, 0.0, -1.62496],
+            [0.0, 0.0, -3.72076],
+        ],
+    }
+
+
+def test_physics_conditioned_launcher_enables_the_full_actor_contract() -> None:
+    argv = build_srb_argv(
+        SimpleNamespace(
+            algo="flowppo",
+            seed=3,
+            num_envs=8,
+            iterations=11,
+            no_gravity_context=False,
+        )
+    )
+
+    assert argv[:6] == [
+        "agent",
+        "train",
+        "--algo",
+        "flowppo",
+        "--env",
+        "locomotion_velocity_tracking_c",
+    ]
+    assert "env.curriculum.command_mode=omnidirectional" in argv
+    assert "env.include_gravity_magnitude=true" in argv
+    assert (
+        "env.physics_conditioning.gravity_magnitude_range=[1.62496,3.72076]"
+        in argv
+    )
+    assert "env.physics_conditioning.gravity_interval_s=[30.0,30.0]" in argv
+    assert "agent.max_iterations=11" in argv
+
+    no_context_argv = build_srb_argv(
+        SimpleNamespace(
+            algo="flowppo",
+            seed=3,
+            num_envs=8,
+            iterations=11,
+            no_gravity_context=True,
+        )
+    )
+    assert "env.include_gravity_magnitude=false" in no_context_argv

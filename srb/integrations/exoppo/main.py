@@ -228,6 +228,30 @@ def _write_run_manifest(
             )
             if hasattr(curriculum, name)
         }
+    physics_conditioning = getattr(env_cfg, "physics_conditioning", None)
+    if physics_conditioning is not None:
+        environment["physics_conditioning"] = _jsonable(physics_conditioning)
+    events = getattr(env_cfg, "events", None)
+    gravity_event = getattr(events, "randomize_gravity", None)
+    if gravity_event is None:
+        environment["gravity_randomization"] = None
+    else:
+        event_params = getattr(gravity_event, "params", {})
+        distribution_params = (
+            event_params.get("distribution_params")
+            if isinstance(event_params, Mapping)
+            else None
+        )
+        environment["gravity_randomization"] = {
+            "mode": _jsonable(getattr(gravity_event, "mode", None)),
+            "is_global_time": _jsonable(
+                getattr(gravity_event, "is_global_time", None)
+            ),
+            "interval_range_s": _jsonable(
+                getattr(gravity_event, "interval_range_s", None)
+            ),
+            "distribution_params": _jsonable(distribution_params),
+        }
     terminations = getattr(env_cfg, "terminations", None)
     if terminations is not None:
         environment["terminations"] = {

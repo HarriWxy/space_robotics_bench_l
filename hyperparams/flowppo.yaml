@@ -20,6 +20,8 @@ randomize_reset_episode_progress: false
 validate: true
 
 obs:
+  # Keep this aligned with ExO-PPO: physics-conditioned runs add the gravity
+  # scalar to ``proprio`` through the environment, not a special actor key.
   actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
 

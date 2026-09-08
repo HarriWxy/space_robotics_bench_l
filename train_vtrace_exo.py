@@ -21,7 +21,7 @@ if __name__ == "__main__":
         # "eval",
         # "rand",
         "--algo",
-        "exoppo",  # policyflow
+        "exofpo",  # policyflow
         "--env",
         "locomotion_velocity_tracking_c",
         # "--cfg",

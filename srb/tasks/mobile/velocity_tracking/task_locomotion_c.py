@@ -11,6 +11,7 @@ from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import (
     push_by_setting_velocity,  # noqa: F401
+    randomize_gravity_uniform,
     reset_joints_by_scale,
 )
 from srb.core.sensor import ContactSensor, ContactSensorCfg
@@ -51,6 +52,19 @@ class LocomotionCurriculumCfg:
         tuple[float, float],
     ] = ((0.9, 1.1), (0.75, 1.25), (0.5, 1.5))
     joint_velocity_range: tuple[float, float] = (0.0, 0.0)
+
+
+@configclass
+class PhysicsConditioningCfg:
+    """Optional scene-wide gravity schedule for conditioning experiments.
+
+    PhysX has one gravity value for the whole scene.  Therefore a vectorized
+    run changes gravity on a global interval rather than independently for
+    each environment; a single-environment run samples it at reset.
+    """
+
+    gravity_magnitude_range: tuple[float, float] | None = None
+    gravity_interval_s: tuple[float, float] = (30.0, 30.0)
 
 
 @configclass
@@ -273,6 +287,7 @@ class LocomotionTaskCfg(TaskCfg):
 
     ## Training
     curriculum: LocomotionCurriculumCfg = LocomotionCurriculumCfg()
+    physics_conditioning: PhysicsConditioningCfg = PhysicsConditioningCfg()
     rewards: LocomotionRewardCfg = LocomotionRewardCfg()
     terminations: LocomotionTerminationCfg = LocomotionTerminationCfg()
 
@@ -294,6 +309,8 @@ class LocomotionTaskCfg(TaskCfg):
         super().__post_init__()
 
         self._validate_curriculum()
+        self._validate_physics_conditioning()
+        self._configure_physics_conditioning()
 
         # Sensor: Robot contacts
         self.scene.contacts_robot.prim_path = f"{self.scene.robot.prim_path}/.*"
@@ -406,6 +423,76 @@ class LocomotionTaskCfg(TaskCfg):
             or self.gravity_magnitude_reference <= 0.0
         ):
             raise ValueError("gravity_magnitude_reference must be finite and positive.")
+
+    def _validate_physics_conditioning(self) -> None:
+        gravity_range = self.physics_conditioning.gravity_magnitude_range
+        if gravity_range is None:
+            return
+        try:
+            gravity_min, gravity_max = (float(value) for value in gravity_range)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "gravity_magnitude_range must contain exactly (min, max)."
+            ) from error
+        if (
+            not isfinite(gravity_min)
+            or not isfinite(gravity_max)
+            or gravity_min < 0.0
+            or gravity_max < gravity_min
+        ):
+            raise ValueError(
+                "gravity_magnitude_range must be finite, non-negative, and ordered."
+            )
+        try:
+            interval_min, interval_max = (
+                float(value) for value in self.physics_conditioning.gravity_interval_s
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "gravity_interval_s must contain exactly (min, max)."
+            ) from error
+        if (
+            not isfinite(interval_min)
+            or not isfinite(interval_max)
+            or interval_min <= 0.0
+            or interval_max < interval_min
+        ):
+            raise ValueError(
+                "gravity_interval_s must be finite, positive, and ordered."
+            )
+
+    def _configure_physics_conditioning(self) -> None:
+        """Override the domain-default gravity range when explicitly requested."""
+
+        gravity_range = self.physics_conditioning.gravity_magnitude_range
+        if gravity_range is None:
+            return
+
+        gravity_min, gravity_max = (float(value) for value in gravity_range)
+        interval_min, interval_max = (
+            float(value) for value in self.physics_conditioning.gravity_interval_s
+        )
+        interval_s = (interval_min, interval_max)
+        mode = "reset" if self.num_envs == 1 else "interval"
+        distribution_params = (
+            (0.0, 0.0, -gravity_min),
+            (0.0, 0.0, -gravity_max),
+        )
+        gravity_event = self.events.randomize_gravity
+        if gravity_event is None:
+            self.events.randomize_gravity = EventTermCfg(
+                func=randomize_gravity_uniform,
+                mode=mode,
+                is_global_time=True,
+                interval_range_s=interval_s,
+                params={"distribution_params": distribution_params},
+            )
+            return
+
+        gravity_event.mode = mode
+        gravity_event.is_global_time = True
+        gravity_event.interval_range_s = interval_s
+        gravity_event.params["distribution_params"] = distribution_params
 
 
 ############
