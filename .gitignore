@@ -41,3 +41,4 @@ wandb/
 
 .vscode
 .agents
+*cache
