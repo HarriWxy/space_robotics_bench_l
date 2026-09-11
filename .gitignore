@@ -9,6 +9,12 @@ wheels/
 ## Virtual environments
 .venv
 
+.vscode
+.agents
+*cache
+nohup.out
+
+
 ## Rust
 debug/
 target/
@@ -38,7 +44,3 @@ wandb/
 
 ## Dump files
 **/core.*
-
-.vscode
-.agents
-*cache
