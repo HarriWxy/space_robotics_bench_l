@@ -26,18 +26,24 @@ license = { text = "MIT OR Apache-2.0" }
 requires-python = "==3.12.*"
 dependencies = [
   ## Core
-  "gymnasium",
-  # "isaaclab~=3.0",
-  "oxidasim~=0.1",
+  "gymnasium==1.3.0",
+  # Isaac Lab is installed separately from its source checkout.
+  # "isaaclab==6.1.17",
+  "numpy==2.3.1",
+  "oxidasim==0.1.0",
   ## Assets
-  ##"simforge[assets]",
+  # "simforge[assets]==0.4.0.1",
   ## Typing
-  "pydantic",
+  "pydantic==2.11.10",
   ## Serialization
-  "orjson",
-  ##"torch==2.11",
-  ##"torchvision==0.26.0",
-  ##"isaacsim[all,extscache]==6.0.1.0",
+  "orjson==3.11.9",
+  ## Scientific computing
+  "scipy==1.17.0",
+  ## PyTorch (CUDA 12.8 wheels)
+  "torch==2.11.0+cu128",
+  "torchvision==0.26.0+cu128",
+  # Isaac Sim is installed separately when using the native/Omniverse setup.
+  # "isaacsim[all,extscache]==6.1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -59,21 +65,20 @@ algo = [
   "srb[sb3]",
   "srb[sbx]",
   "srb[skrl]",
-  "srb[robomimic]",
-  "srb[policyflow]",
+  # "srb[robomimic]",
 ]
 dreamer = [
   #
   # Note: Only editable install of dreamer works for now (circular import of  partially initialized module included with sys.path)
   # TODO[mid]: Fix Dreamer install (fork and fix recursive import)
   # "dreamer@git+https://github.com/AndrejOrsula/dreamerv3.git@4049794d4135e41c691f18da38a9af7541b01553",
-  # Note: jax==0.5.1 causes issues
-  "jax~=0.4,<0.5.1",
+  "jax==0.11.0",
 ]
 sb3 = [
   #
-  "stable-baselines3~=2.9",
-  "sb3-contrib~=2.9",
+  "stable-baselines3==2.9.0",
+  "sb3-contrib==2.9.0",
+  "rl_zoo3==2.9.1",
   # Note: The fork relaxes the dependency for gymnasium (shimmy requires gymnasium>=1.0)
   # "rl_zoo3@git+https://github.com/AndrejOrsula/rl-baselines3-zoo.git@e04921b4ccbadbc9f6bcc46cc1787ffc1d2c8963",
 ]
@@ -84,17 +89,13 @@ sbx = [
 ]
 skrl = [
   #
-  "skrl~=2.0",
+  "skrl==2.1.0",
 ]
 robomimic = [
   #
   # "robomimic@git+https://github.com/ARISE-Initiative/robomimic.git@TODO",
 ]
-policyflow = [
-  #
-  # Install PolicyFlow from local repo: cd ~/PolicyFlow_srb/policyflow && pip install -e .
-  "einops~=0.6",
-]
+
 ## Hardware
 hw = [
   #
@@ -112,12 +113,12 @@ logging = [
 ]
 wandb = [
   #
-  "wandb~=0.19",
+  "wandb==0.28.1",
 ]
 tensorboard = [
   #
-  "tensorboard~=2.0",
-  "tensorflow~=2.0",
+  "tensorboard==2.21.0",
+  "tensorflow",
 ]
 ## Utils
 cli = [
@@ -137,11 +138,11 @@ dev = [
 ]
 rich = [
   #
-  "rich~=15.0",
+  "rich==14.3.4",
 ]
 test = [
   #
-  "pytest~=8.0",
+  "pytest==9.1.1",
   "pytest-order~=1.0",
   "pytest-sugar~=1.0",
 ]
