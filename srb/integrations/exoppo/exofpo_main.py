@@ -53,10 +53,10 @@ class ExoFpoConfig:
     env_backend: str = "gymnasium"
     seed: int = 0
     total_steps: int = 1_000_000
-    num_envs: int = 16
-    rollout_steps: int = 256
-    replay_N: int = 8
-    warmup_rollouts: int = 8
+    num_envs: int = 256
+    rollout_steps: int = 32
+    replay_N: int = 4
+    warmup_rollouts: int = 4
     update_epochs: int = 2
     batch_size: int = 256
     gamma: float = 0.99

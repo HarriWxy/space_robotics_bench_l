@@ -49,11 +49,11 @@ class SrbExoPpoEnvWrapper:
         action_high = torch.as_tensor(
             action_space.high, dtype=torch.float32, device=self.device
         ).reshape(1, -1)
-        if (
-            not torch.isfinite(action_low).all()
-            or not torch.isfinite(action_high).all()
-        ):
-            raise ValueError("ExO-PPO flow requires finite action bounds")
+        # if (
+        #     not torch.isfinite(action_low).all()
+        #     or not torch.isfinite(action_high).all()
+        # ):
+        #     raise ValueError("ExO-PPO flow requires finite action bounds")
         if not torch.all(action_high > action_low):
             raise ValueError("every action upper bound must exceed its lower bound")
         self.action_low = action_low
@@ -275,7 +275,8 @@ class SrbExoPpoEnvWrapper:
         torch.Tensor,
         dict[str, Any],
     ]:
-        env_action = self.action_from_pre_tanh(pre_tanh_action)
+        # env_action = self.action_from_pre_tanh(pre_tanh_action)
+        env_action = pre_tanh_action
         observations, reward, terminated, truncated, info = self.env.step(env_action)
         actor, critic, physics = self.encode_observations_with_physics(observations)
         reward = self._vector(

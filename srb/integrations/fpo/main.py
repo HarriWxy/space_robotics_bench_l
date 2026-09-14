@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import gymnasium
 import torch
+from isaaclab_fpo.runners.on_policy_runner import OnPolicyRunner
 
 from srb.integrations.fpo.wrapper import SrbFpoEnvWrapper
 from srb.utils import logging
@@ -48,6 +49,26 @@ _RUNNER_DEFAULTS = {
     "resume": False,
     "load_run": ".*",
     "load_checkpoint": "model_.*.pt",
+    "dynamics_encoder": {
+        "enabled": False,
+        "state_keys": ["proprio", "proprio_dyn"],
+        "latent_dim": 32,
+        "hidden_dim": 128,
+        "history_length": 16,
+        "num_heads": 4,
+        "num_layers": 2,
+        "transformer_ff_dim": None,
+        "physics_dim": 1,
+        "dropout": 0.0,
+        "transition_loss_weight": 1.0,
+        "physics_loss_weight": 1.0,
+        "update_interval": 64,
+        "learning_rate": 3.0e-4,
+        "weight_decay": 1.0e-4,
+        "max_grad_norm": 1.0,
+        "physics_target_key": "metrics/gravity_magnitude",
+        "physics_target_scale": 9.80665,
+    },
 }
 
 _POLICY_DEFAULTS = {
@@ -281,6 +302,79 @@ def _build_config(
     return _to_namespace(merged)
 
 
+def _configure_dynamics_encoder(
+    wrapped_env: SrbFpoEnvWrapper,
+    *,
+    cfg: SimpleNamespace,
+    workflow: Literal["train", "eval"],
+) -> Any | None:
+    """Attach the optional dynamics encoder without changing baseline FPO."""
+
+    dynamics_cfg = getattr(cfg, "dynamics_encoder", None)
+    if dynamics_cfg is None or not bool(getattr(dynamics_cfg, "enabled", False)):
+        return None
+
+    from dyn.dyn_encoder import (
+        DynamicsEncoder,
+        DynamicsEncoderConfig,
+        DynamicsEncoderTrainer,
+    )
+
+    state_keys = tuple(getattr(dynamics_cfg, "state_keys", ("proprio", "proprio_dyn")))
+    state = wrapped_env.observation_tensor(state_keys, name="dynamics_state")
+    encoder = DynamicsEncoder(
+        DynamicsEncoderConfig(
+            state_dim=int(state.shape[1]),
+            action_dim=wrapped_env.num_actions,
+            latent_dim=int(dynamics_cfg.latent_dim),
+            hidden_dim=int(dynamics_cfg.hidden_dim),
+            history_length=int(dynamics_cfg.history_length),
+            num_heads=int(dynamics_cfg.num_heads),
+            num_layers=int(dynamics_cfg.num_layers),
+            transformer_ff_dim=(
+                None
+                if dynamics_cfg.transformer_ff_dim is None
+                else int(dynamics_cfg.transformer_ff_dim)
+            ),
+            physics_dim=int(dynamics_cfg.physics_dim),
+            dropout=float(dynamics_cfg.dropout),
+            transition_loss_weight=float(dynamics_cfg.transition_loss_weight),
+            physics_loss_weight=float(dynamics_cfg.physics_loss_weight),
+        )
+    ).to(wrapped_env.device)
+    trainer = (
+        DynamicsEncoderTrainer(
+            encoder,
+            learning_rate=float(dynamics_cfg.learning_rate),
+            weight_decay=float(dynamics_cfg.weight_decay),
+            max_grad_norm=float(dynamics_cfg.max_grad_norm),
+        )
+        if workflow == "train"
+        else None
+    )
+    target_key = getattr(dynamics_cfg, "physics_target_key", None)
+    target_scale = getattr(dynamics_cfg, "physics_target_scale", None)
+    wrapped_env.attach_dynamics_encoder(
+        encoder,
+        state_keys=state_keys,
+        trainer=trainer,
+        update_interval=int(dynamics_cfg.update_interval),
+        physics_target_key=target_key,
+        physics_target_scale=(None if target_scale is None else float(target_scale)),
+    )
+    logging.info(
+        "Dynamics encoder enabled: state_dim=%d, action_dim=%d, latent_dim=%d, "
+        "history_length=%d, transformer_layers=%d, update_interval=%d",
+        encoder.state_dim,
+        encoder.action_dim,
+        encoder.latent_dim,
+        encoder.history_length,
+        int(dynamics_cfg.num_layers),
+        int(dynamics_cfg.update_interval),
+    )
+    return encoder
+
+
 def _last_checkpoint(logdir: Path) -> Path | None:
     checkpoints = []
     for checkpoint in logdir.glob("model_*.pt"):
@@ -309,7 +403,7 @@ def _resolve_checkpoint(
     return None
 
 
-def _install_action_consistency(runner: Any, clip_actions: float | None) -> None:
+def _install_action_consistency(runner: OnPolicyRunner, clip_actions: float | None) -> None:
     """Keep FPO's stored action equal to the action sent to SRB.
 
     The upstream FPO wrapper clips only inside env.step. FPO computes its
@@ -396,6 +490,11 @@ def run(
         env_id=env_id,
     )
     wrapped_env.clip_actions = cfg.clip_actions
+    dynamics_encoder = _configure_dynamics_encoder(
+        wrapped_env,
+        cfg=cfg,
+        workflow=workflow,
+    )
 
     from_checkpoint = _resolve_checkpoint(
         workflow=workflow,
@@ -416,6 +515,11 @@ def run(
         log_dir=runner_logdir.as_posix(),
         device=cfg.device,
     )
+    if dynamics_encoder is not None:
+        # FPO creates its optimizer before this optional module is attached, so
+        # the encoder is updated only by DynamicsEncoderTrainer. Registering it
+        # here still makes the normal FPO checkpoint contain its weights.
+        runner.alg.policy.add_module("dynamics_encoder", dynamics_encoder)
     runner.add_git_repo_to_log(__file__)
     _install_action_consistency(runner, cfg.clip_actions)
     _install_environment_step_logging(runner)

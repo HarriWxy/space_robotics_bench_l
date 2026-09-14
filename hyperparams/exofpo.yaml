@@ -5,7 +5,7 @@ seed: 0
 device: null
 # 6104 * 64 rollout steps * 256 environments = 100,007,936 transitions.
 max_iterations: 6104
-rollout_steps: 64
+rollout_steps: 32
 replay_N: 4
 warmup_rollouts: 4
 update_epochs: 4
@@ -28,7 +28,7 @@ smoothing:
 # FPO-compatible conditional velocity field.
 hidden_sizes: [256, 256, 256]
 activation: elu
-actor_scale: 1.0
+actor_scale: 0.5
 mlp_output_scale: 1.0
 actor_final_layer_weight_scale: null
 timestep_embed_dim: 8
@@ -38,7 +38,7 @@ cfm_loss_t_inverse_cdf_beta: 1.0
 cfm_loss_reduction: sqrt
 action_perturb_std: 0.02
 n_samples_per_action: 16
-clip_actions: 1.0
+clip_actions: null
 
 # ExO recent-policy smooth CFM ratio.
 gamma: 0.997

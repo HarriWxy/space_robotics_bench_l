@@ -1,10 +1,10 @@
 # seed: 42
 # 6104 * 64 * 256 = 100,007,936 environment transitions.
-num_steps_per_env: 64
+num_steps_per_env: 32
 max_iterations: 6104
 empirical_normalization: true
 randomize_reset_episode_progress: 0.0
-clip_actions: 1.0
+clip_actions: null # 1.0
 save_interval: 2500
 experiment_name: srb_fpo
 run_name: ""
@@ -13,7 +13,7 @@ neptune_project: isaaclab
 wandb_project: isaaclab
 eval_episodes: 10
 flow_eval_modes: [zero, random]
-# flow_eval_fixed_seed: 12345
+flow_eval_fixed_seed: null # 12345
 enable_post_training_eval: false
 post_eval_checkpoint_interval: 1
 resume: false
@@ -24,13 +24,36 @@ obs:
   actor_keys: [proprio, proprio_dyn, command]
   critic_keys: null
 
+dynamics_encoder:
+  # Disabled by default so existing FPO checkpoints retain their observation shape.
+  enabled: false
+  state_keys: [proprio, proprio_dyn]
+  latent_dim: 32
+  hidden_dim: 128
+  history_length: 16
+  num_heads: 4
+  num_layers: 2
+  transformer_ff_dim: null
+  physics_dim: 1
+  dropout: 0.0
+  transition_loss_weight: 1.0
+  physics_loss_weight: 1.0
+  # Match num_steps_per_env for one auxiliary update per FPO rollout.
+  update_interval: 64
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-4
+  max_grad_norm: 1.0
+  # The current locomotion task logs scene-global gravity as this scalar.
+  physics_target_key: metrics/gravity_magnitude
+  physics_target_scale: 9.80665
+
 policy:
   class_name: ActorCritic
   init_noise_std: 1.0
   actor_hidden_dims: [256, 256, 256]
   critic_hidden_dims: [256, 256, 256]
   activation: elu
-  actor_scale: 1.0
+  actor_scale: 0.5 #  1.0
   actor_mlp_output_scale: 1.0
   actor_final_layer_weight_scale: null
   timestep_embed_dim: 8
@@ -47,7 +70,7 @@ algorithm:
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   adam_betas: [0.9, 0.999]
-  schedule: fixed
+  schedule: adaptive
   # Match PPO/SAC/ExO's effective 25 Hz horizon for the main comparison.
   gamma: 0.997
   lam: 0.95

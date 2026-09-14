@@ -3,7 +3,7 @@ seed: 0
 device: null
 # 6104 * 64 rollout steps * 256 environments = 100,007,936 transitions.
 max_iterations: 6104
-rollout_steps: 64
+rollout_steps: 32
 replay_N: 4
 warmup_rollouts: 4
 update_epochs: 4
@@ -16,6 +16,7 @@ observation_clip: 10.0
 # Keep episode-duration success metrics comparable across algorithms.
 randomize_reset_episode_progress: false
 validate: true
+clip_actions: null
 
 # SRB observation mapping. A null critic_keys value reuses the actor input.
 # Physics-conditioned runs enable ``env.include_gravity_magnitude=true``;

@@ -8,6 +8,12 @@ from typing import Any
 import gymnasium
 import torch
 
+from dyn.dyn_encoder import (
+    DynamicsEncoder,
+    DynamicsEncoderRuntime,
+    DynamicsEncoderTrainer,
+)
+
 
 class SrbFpoEnvWrapper:
     """Convert SRB step-return observations into FPO tensors.
@@ -46,6 +52,15 @@ class SrbFpoEnvWrapper:
         self.validate = validate
         self._validated = False
         self._obs: Mapping[str, Any] | None = None
+        self._dynamics_encoder: DynamicsEncoder | None = None
+        self._dynamics_runtime: DynamicsEncoderRuntime | None = None
+        self._dynamics_trainer: DynamicsEncoderTrainer | None = None
+        self._dynamics_state_keys: tuple[str, ...] = ()
+        self._dynamics_target_key: str | None = None
+        self._dynamics_target_scale: float | None = None
+        self._dynamics_update_interval = 1
+        self._dynamics_step_count = 0
+        self._dynamics_last_metrics: dict[str, float] | None = None
 
         # FPO's runner reads the current observation immediately in __init__.
         self.reset()
@@ -121,6 +136,145 @@ class SrbFpoEnvWrapper:
             dim=-1,
         )
 
+    def observation_tensor(
+        self,
+        keys: Sequence[str],
+        *,
+        observations: Mapping[str, Any] | None = None,
+        name: str = "observation",
+    ) -> torch.Tensor:
+        """Flatten selected SRB observation categories from the current step."""
+
+        if observations is None:
+            if self._obs is None:
+                raise RuntimeError("the wrapper has no current observation")
+            observations = self._obs
+        return self._concat_categories(observations, keys, name=name)
+
+    def attach_dynamics_encoder(
+        self,
+        encoder: DynamicsEncoder,
+        *,
+        state_keys: Sequence[str] = ("proprio", "proprio_dyn"),
+        trainer: DynamicsEncoderTrainer | None = None,
+        update_interval: int = 1,
+        physics_target_key: str | None = None,
+        physics_target_scale: float | None = None,
+    ) -> None:
+        """Append an online dynamics latent to the actor observation.
+
+        The wrapper records the transition from the previous observation to
+        the current observation.  The auxiliary optimizer runs in
+        ``env.step`` under ``torch.enable_grad`` so it remains compatible with
+        FPO's no-gradient rollout context.  The encoder is not part of FPO's
+        policy optimizer; its weights are registered on the policy by the
+        FPO integration so the normal checkpoint contains the encoder state.
+
+        ``physics_target_key`` is read from the raw SRB ``info`` mapping.  A
+        scalar target is expanded over environments, which matches the current
+        scene-global gravity implementation.
+        """
+
+        if not state_keys:
+            raise ValueError("state_keys must contain at least one observation category")
+        if update_interval <= 0:
+            raise ValueError(f"update_interval must be positive, got {update_interval}")
+        if physics_target_key is not None and encoder.physics_dim <= 0:
+            raise ValueError(
+                "physics_target_key requires DynamicsEncoderConfig.physics_dim > 0"
+            )
+        if physics_target_scale is not None and physics_target_scale <= 0.0:
+            raise ValueError("physics_target_scale must be positive or None")
+        if physics_target_key is None and physics_target_scale is not None:
+            raise ValueError(
+                "physics_target_scale is only valid with physics_target_key"
+            )
+        if self._obs is None:
+            raise RuntimeError("attach_dynamics_encoder() requires an initialized environment")
+
+        state_keys = tuple(state_keys)
+        dynamics_state = self.observation_tensor(
+            state_keys,
+            name="dynamics_state",
+        )
+        if dynamics_state.shape[1] != encoder.state_dim:
+            raise ValueError(
+                "dynamics encoder state_dim does not match configured observation "
+                f"categories {state_keys}: expected {dynamics_state.shape[1]}, "
+                f"got {encoder.state_dim}"
+            )
+        if encoder.action_dim != self.num_actions:
+            raise ValueError(
+                "dynamics encoder action_dim does not match the environment: "
+                f"expected {self.num_actions}, got {encoder.action_dim}"
+            )
+
+        encoder.to(device=self.device)
+        self._dynamics_encoder = encoder
+        self._dynamics_state_keys = state_keys
+        self._dynamics_target_key = physics_target_key
+        self._dynamics_target_scale = physics_target_scale
+        self._dynamics_update_interval = update_interval
+        self._dynamics_step_count = 0
+        self._dynamics_last_metrics = None
+        self._validated = False
+        self._dynamics_runtime = DynamicsEncoderRuntime(
+            encoder,
+            num_envs=self.num_envs,
+            device=self.device,
+        )
+        self._dynamics_runtime.reset(dynamics_state)
+        self._dynamics_trainer = trainer
+
+    @property
+    def dynamics_encoder(self) -> DynamicsEncoder | None:
+        """Return the optional encoder for checkpoint registration."""
+
+        return self._dynamics_encoder
+
+    def _dynamics_state(self, observations: Mapping[str, Any]) -> torch.Tensor:
+        if self._dynamics_runtime is None:
+            raise RuntimeError("dynamics encoder is not attached")
+        return self.observation_tensor(
+            self._dynamics_state_keys,
+            observations=observations,
+            name="dynamics_state",
+        )
+
+    def _physics_target(self, info: Any) -> torch.Tensor | None:
+        if self._dynamics_target_key is None:
+            return None
+        if not isinstance(info, Mapping) or self._dynamics_target_key not in info:
+            raise KeyError(
+                "configured dynamics physics_target_key is missing from SRB info: "
+                f"{self._dynamics_target_key!r}"
+            )
+        value = torch.as_tensor(
+            info[self._dynamics_target_key],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        if value.numel() == 1:
+            value = value.expand(self.num_envs)
+        if value.numel() % self.num_envs != 0:
+            raise ValueError(
+                "dynamics physics target cannot be batched over environments: "
+                f"shape={tuple(value.shape)}, num_envs={self.num_envs}"
+            )
+        value = value.reshape(self.num_envs, -1)
+        if self._dynamics_target_scale is not None:
+            value = value / self._dynamics_target_scale
+        return value
+
+    def _append_dynamics_latent(
+        self,
+        actor: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._dynamics_runtime is None:
+            return actor
+        latent = self._dynamics_runtime.begin_step()
+        return torch.cat((actor, latent), dim=-1)
+
     def _encode_observations(
         self, observations: Mapping[str, Any]
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -168,6 +322,8 @@ class SrbFpoEnvWrapper:
             raise ValueError(
                 f"FPO critic observation must have shape [N, C], got {tuple(critic.shape)}"
             )
+
+        actor = self._append_dynamics_latent(actor)
 
         if self.validate and not self._validated:
             tensors = [actor] + ([critic] if critic is not None else [])
@@ -255,6 +411,8 @@ class SrbFpoEnvWrapper:
                 f"got {type(observations).__name__}"
             )
         self._obs = observations
+        if self._dynamics_runtime is not None:
+            self._dynamics_runtime.reset(self._dynamics_state(observations))
         actor, critic = self._encode_observations(observations)
         return actor, self._make_extras(info, critic)
 
@@ -279,16 +437,7 @@ class SrbFpoEnvWrapper:
                 "SRB FPO integration expects a mapping observation from env.step(), "
                 f"got {type(observations).__name__}"
             )
-        self._obs = observations
-        actor, critic = self._encode_observations(observations)
 
-        reward = self._vector(
-            reward,
-            num_envs=self.num_envs,
-            device=self.device,
-            dtype=torch.float32,
-            name="reward",
-        )
         terminated = self._vector(
             terminated,
             num_envs=self.num_envs,
@@ -303,9 +452,59 @@ class SrbFpoEnvWrapper:
             dtype=torch.bool,
             name="truncated",
         )
-        dones = (terminated | truncated).to(dtype=torch.long)
+        dones = terminated | truncated
+        if self._dynamics_runtime is not None:
+            self._dynamics_runtime.observe(
+                actions,
+                self._dynamics_state(observations),
+                dones,
+                physics_target=self._physics_target(info),
+            )
+            self._dynamics_step_count += 1
+            if (
+                self._dynamics_trainer is not None
+                and self._dynamics_encoder is not None
+                and self._dynamics_encoder.training
+                and self._dynamics_step_count % self._dynamics_update_interval == 0
+            ):
+                dynamics_batch = self._dynamics_runtime.drain_batch()
+                if dynamics_batch is not None:
+                    # FPO collects rollouts inside torch.no_grad().
+                    with torch.enable_grad():
+                        self._dynamics_last_metrics = self._dynamics_trainer.update(
+                            dynamics_batch
+                        )
+            else:
+                # A frozen/pretrained encoder, and FPO's post-training eval,
+                # still need history but must not retain auxiliary samples.
+                self._dynamics_runtime.drain_batch()
+
+        self._obs = observations
+        actor, critic = self._encode_observations(observations)
+
+        reward = self._vector(
+            reward,
+            num_envs=self.num_envs,
+            device=self.device,
+            dtype=torch.float32,
+            name="reward",
+        )
+        dones = dones.to(dtype=torch.long)
 
         extras = self._make_extras(info, critic)
+        if self._dynamics_last_metrics is not None:
+            log_container = (
+                "episode" if isinstance(extras.get("episode"), Mapping) else "log"
+            )
+            logs = dict(extras.get(log_container, {}))
+            logs.update(
+                {
+                    f"train/dynamics/{name}": value
+                    for name, value in self._dynamics_last_metrics.items()
+                }
+            )
+            extras[log_container] = logs
+            self._dynamics_last_metrics = None
         finite_horizon = getattr(self.cfg, "is_finite_horizon", None)
         if finite_horizon is not True:
             extras["time_outs"] = truncated
