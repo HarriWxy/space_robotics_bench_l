@@ -93,19 +93,19 @@ def reset_rigid_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
 def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
     for articulation_asset in env.scene.articulations.values():
         # Obtain default and deal with the offset for env origins
-        default_root_state = articulation_asset.data.default_root_state.torch[env_ids].clone()
-        # default_root_pos = articulation_asset.data.default_root_pose[env_ids].clone()
-        # default_joint_vel = articulation_asset.data.default_joint_vel.torch[env_ids].clone()
+        # default_root_state = articulation_asset.data.default_root_state.torch[env_ids].clone() # batch, 13
+        default_root_pos = articulation_asset.data.default_root_pose[env_ids].clone() #  batch, 7 
+        default_root_vel = articulation_asset.data.default_root_vel.torch[env_ids].clone() #  batch, 6 
         
-        default_root_state[:, 0:3] += env.scene.env_origins[env_ids] ## what does this mean?  
+        default_root_pos[:, 0:3] += env.scene.env_origins[env_ids] ## add origin offset for each environment
         # Set into the physics simulation
         articulation_asset.write_root_pose_to_sim_index(
-            root_pose=default_root_state[:, :7],
-            env_ids=env_ids,  # type: ignore
+            root_pose = default_root_pos,
+            env_ids = env_ids,  # type: ignore
         )
-        articulation_asset.write_root_velocity_to_sim(
-            default_root_state[:, 7:],
-            env_ids=env_ids,  # type: ignore
+        articulation_asset.write_root_velocity_to_sim_index(
+            root_velocity = default_root_vel,
+            env_ids = env_ids,  # type: ignore
         )
         # Obtain default joint positions
         default_joint_pos = articulation_asset.data.default_joint_pos.torch[env_ids].clone()
