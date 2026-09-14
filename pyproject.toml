@@ -34,7 +34,7 @@ dependencies = [
   ## Assets
   # "simforge[assets]==0.4.0.1",
   ## Typing
-  "pydantic==2.11.10",
+  "pydantic",
   ## Serialization
   "orjson==3.11.9",
   ## Scientific computing
@@ -76,16 +76,14 @@ dreamer = [
 ]
 sb3 = [
   #
-  "stable-baselines3==2.9.0",
-  "sb3-contrib==2.9.0",
-  "rl_zoo3==2.9.1",
-  # Note: The fork relaxes the dependency for gymnasium (shimmy requires gymnasium>=1.0)
-  # "rl_zoo3@git+https://github.com/AndrejOrsula/rl-baselines3-zoo.git@e04921b4ccbadbc9f6bcc46cc1787ffc1d2c8963",
+  "stable-baselines3",
+  "sb3-contrib",
+  "rl_zoo3",
 ]
 sbx = [
   #
-  "sbx-rl~=0.23",
-  "tf_keras~=2.21",
+  "sbx-rl",
+  "tf_keras",
 ]
 skrl = [
   #
@@ -113,11 +111,11 @@ logging = [
 ]
 wandb = [
   #
-  "wandb==0.28.1",
+  "wandb",
 ]
 tensorboard = [
   #
-  "tensorboard==2.21.0",
+  "tensorboard",
   "tensorflow",
 ]
 ## Utils
@@ -125,9 +123,9 @@ cli = [
   #
   "srb[rich]",
   "srb[repl]",
-  "argcomplete~=3.0",
-  "hydra-core~=1.0",
-  "omegaconf~=2.0",
+  "argcomplete",
+  "hydra-core",
+  "omegaconf",
 ]
 dev = [
   #
@@ -138,33 +136,33 @@ dev = [
 ]
 rich = [
   #
-  "rich==14.3.4",
+  "rich",
 ]
 test = [
   #
-  "pytest==9.1.1",
-  "pytest-order~=1.0",
-  "pytest-sugar~=1.0",
+  "pytest",
+  "pytest-order",
+  "pytest-sugar",
 ]
 tracing = [
   #
   "srb[rich]",
-  "logfire~=4.0",
+  "logfire  ",
 ]
 typing = [
   #
-  "mypy~=1.0",
-  "types-psutil~=7.0",
-  "types-PyYAML~=6.0",
-  "types-toml~=0.10",
+  "mypy",
+  "types-psutil",
+  "types-PyYAML",
+  "types-toml",
 ]
 repl = [
   #
-  "ptpython~=3.0",
+  "ptpython",
 ]
 plots = [
   #
-  "seaborn~=0.13",
+  "seaborn",
 ]
 
 [tool.uv]
