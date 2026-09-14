@@ -14,6 +14,7 @@ import torch
 from isaaclab_fpo.runners.on_policy_runner import OnPolicyRunner
 
 from srb.integrations.fpo.wrapper import SrbFpoEnvWrapper
+from srb.integrations.tensorboard import CanonicalScalarWriter
 from srb.utils import logging
 from srb.utils.cfg import stamp_dir
 from srb.wrappers import maybe_wrap_action_smoothing
@@ -120,31 +121,18 @@ _ALGORITHM_DEFAULTS = {
 }
 
 
-class _EnvironmentStepWriter:
-    """Forward scalar logging with cumulative environment steps as x-axis."""
+class _EnvironmentStepWriter(CanonicalScalarWriter):
+    """Write FPO scalars with canonical tags and environment-step x-axis."""
 
     def __init__(self, writer: Any, runner: Any):
-        self._writer = writer
-        self._runner = runner
-
-    def add_scalar(
-        self,
-        tag: str,
-        scalar_value: Any,
-        global_step: int | None = None,
-        walltime: float | None = None,
-    ) -> None:
-        step = int(self._runner.tot_timesteps)
-        if step <= 0 and global_step is not None:
-            step = int(global_step)
-        self._writer.add_scalar(tag, scalar_value, step, walltime)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._writer, name)
+        super().__init__(
+            writer,
+            step_fn=lambda: int(runner.tot_timesteps),
+        )
 
 
 def _install_environment_step_logging(runner: Any) -> None:
-    """Use environment-step x-coordinates and weighted episode rates."""
+    """Use canonical tags, environment-step x-coordinates and episode rates."""
 
     original_log = runner.log
 
@@ -229,6 +217,7 @@ def _aggregate_episode_event_logs(locs: dict[str, Any]) -> None:
     first_info["rollout/episode_duration_s"] = (
         float(sums.get("rollout/metrics/episode_duration_s", 0.0)) / completed
     )
+    first_info["rollout/metrics/episode_completed"] = completed
     locs["ep_infos"] = filtered_infos
 
 

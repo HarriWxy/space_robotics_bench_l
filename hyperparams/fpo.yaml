@@ -1,6 +1,6 @@
 # seed: 42
 # 6104 * 64 * 256 = 100,007,936 environment transitions.
-num_steps_per_env: 32
+num_steps_per_env: 64
 max_iterations: 6104
 empirical_normalization: true
 randomize_reset_episode_progress: 0.0
@@ -50,10 +50,10 @@ dynamics_encoder:
 policy:
   class_name: ActorCritic
   init_noise_std: 1.0
-  actor_hidden_dims: [256, 256, 256]
-  critic_hidden_dims: [256, 256, 256]
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
   activation: elu
-  actor_scale: 0.5 #  1.0
+  actor_scale: 0.25 #  1.0
   actor_mlp_output_scale: 1.0
   actor_final_layer_weight_scale: null
   timestep_embed_dim: 8
@@ -66,8 +66,8 @@ policy:
 algorithm:
   class_name: FPO
   num_learning_epochs: 16
-  num_mini_batches: 4
-  learning_rate: 1.0e-4
+  num_mini_batches: 64
+  learning_rate: 1.0e-3
   weight_decay: 1.0e-4
   adam_betas: [0.9, 0.999]
   schedule: adaptive

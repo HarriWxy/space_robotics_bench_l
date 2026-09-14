@@ -2,6 +2,8 @@ import numpy
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import TensorBoardOutputFormat
 
+from srb.integrations.tensorboard import canonical_tag
+
 
 class RewardTermsTensorboardCallback(BaseCallback):
     def __init__(self, verbose: int = 0):
@@ -30,13 +32,17 @@ class RewardTermsTensorboardCallback(BaseCallback):
             reward_terms = info.get("reward_terms")
             if isinstance(reward_terms, dict):
                 for reward_term, value in reward_terms.items():
-                    reward_terms_by_name.setdefault(reward_term, []).extend(
+                    tag = canonical_tag(f"rollout/reward_terms/{reward_term}")
+                    reward_terms_by_name.setdefault(tag, []).extend(
                         self._to_float_list(value)
                     )
 
             for name, value in info.items():
                 if isinstance(name, str) and name.startswith("metrics/"):
                     metric_name = name.removeprefix("metrics/")
+                    metric_name = canonical_tag(
+                        f"rollout/metrics/{metric_name}"
+                    ).removeprefix("rollout/metrics/")
                     if metric_name.startswith("episode_"):
                         episode_events[metric_name] = episode_events.get(
                             metric_name, 0.0
@@ -58,7 +64,7 @@ class RewardTermsTensorboardCallback(BaseCallback):
 
             if self._tensorboard_writer is not None:
                 self._tensorboard_writer.add_scalar(
-                    f"rollout/reward_terms/{reward_term}",
+                    reward_term,
                     mean_reward_term,
                     self.num_timesteps,
                 )
@@ -84,7 +90,7 @@ class RewardTermsTensorboardCallback(BaseCallback):
                 # )
 
             self.logger.record_mean(
-                f"rollout/reward_terms/{reward_term}",
+                reward_term,
                 mean_reward_term,
                 exclude="tensorboard" if self._tensorboard_writer is not None else None,
             )
@@ -94,7 +100,7 @@ class RewardTermsTensorboardCallback(BaseCallback):
                 continue
             metric_array = numpy.asarray(metric_values, dtype=numpy.float32)
             mean_metric = float(metric_array.mean())
-            tag = f"rollout/metrics/{metric_name}"
+            tag = canonical_tag(f"rollout/metrics/{metric_name}")
             if self._tensorboard_writer is not None:
                 self._tensorboard_writer.add_scalar(
                     tag,
@@ -112,6 +118,7 @@ class RewardTermsTensorboardCallback(BaseCallback):
             success_rate = episode_events.get("episode_success", 0.0) / completed
             failure_rate = episode_events.get("episode_failed", 0.0) / completed
             for name, value in (
+                ("rollout/metrics/episode_completed", completed),
                 ("rollout/episode_success_rate", success_rate),
                 ("rollout/episode_failure_rate", failure_rate),
                 (

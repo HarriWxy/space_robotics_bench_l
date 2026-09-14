@@ -77,13 +77,22 @@ While training, you might be interested in monitoring the progress and comparing
 tensorboard --logdir ./space_robotics_bench/logs --bind_all
 ```
 
-The PPO-like integrations (`fpo`, `exoppo`, `flowppo`, and `policyflow`) expose the same
-comparison fields as SB3/SBX: `rollout/ep_rew_mean`, `rollout/ep_len_mean`,
-`time/fps`, and the common `train/` fields `approx_kl`, `clip_fraction`,
-`clip_range`, `entropy_loss`, `explained_variance`, `learning_rate`, `loss`,
-`policy_gradient_loss`, `std`, and `value_loss`. Native algorithm diagnostics
-such as flow losses remain available under their original names. SAC-specific
-fields continue to use `train/actor_loss`, `train/critic_loss`,
+The PPO-like integrations (`rsl_rl`, `fpo`, `exoppo`, `flowppo`, and `policyflow`) use
+the same names for overlapping comparison fields as SB3/SBX:
+`rollout/ep_rew_mean`, `rollout/ep_len_mean`, `time/fps`, and the common
+`train/` fields `approx_kl`, `clip_fraction`, `clip_range`, `entropy_loss`,
+`explained_variance`, `learning_rate`, `loss`, `policy_gradient_loss`, `std`,
+and `value_loss`. A backend omits a field when its upstream algorithm does not
+expose that quantity; it is not replaced with a fabricated value. Native
+algorithm diagnostics such as flow losses remain available under lowercase
+`train/` or `rollout/` namespaces. All TensorBoard scalar tags use lowercase; legacy
+`Episode/`, `Loss/`, `Metrics/`, `Perf/`, `Policy/`, and `Train/` aliases are
+canonicalized at the writer boundary. Task diagnostics use
+`rollout/reward_terms/<term>` and `rollout/metrics/<name>`, while completed
+episode aggregates use `rollout/episode_success_rate`,
+`rollout/episode_failure_rate`, `rollout/episode_tracking_fraction`, and
+`rollout/episode_duration_s`. SAC-specific fields continue to use
+`train/actor_loss`, `train/critic_loss`,
 `train/ent_coef`, and `train/ent_coef_loss`.
 
 Furthermore, you can enable Weights & Biases (`wandb`) logging by passing framework-specific flags **\[subject to future standardization\]**:

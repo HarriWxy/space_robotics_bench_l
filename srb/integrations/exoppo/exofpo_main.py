@@ -379,6 +379,7 @@ def _collect_rollout(
     event_zero = torch.zeros((), device=trainer.device)
     completed = float(episode_event_sums.get("episode_completed", event_zero).cpu())
     if completed > 0.0:
+        metrics["rollout/metrics/episode_completed"] = completed
         metrics["rollout/episode_success_rate"] = (
             float(episode_event_sums.get("episode_success", event_zero).cpu())
             / completed
@@ -472,7 +473,7 @@ def _train(
             "config/num_envs": wrapped_env.num_envs,
             "config/total_steps": trainer.config.total_steps,
             "config/rollout_steps": trainer.config.rollout_steps,
-            "config/replay_N": trainer.config.replay_N,
+            "config/replay_n": trainer.config.replay_N,
             "config/replay_capacity_steps": replay_capacity_steps,
             "config/warmup_rollouts": trainer.config.warmup_rollouts,
             "config/gamma": trainer.config.gamma,
@@ -697,6 +698,7 @@ def _evaluate(
             episode_event_sums.get("episode_completed", event_zero).cpu()
         )
         if completed_events > 0.0:
+            metrics["eval/metrics/episode_completed"] = completed_events
             metrics["eval/episode_success_rate"] = (
                 float(episode_event_sums.get("episode_success", event_zero).cpu())
                 / completed_events
@@ -711,6 +713,10 @@ def _evaluate(
                         "episode_tracking_fraction", event_zero
                     ).cpu()
                 )
+                / completed_events
+            )
+            metrics["eval/episode_duration_s"] = (
+                float(episode_event_sums.get("episode_duration_s", event_zero).cpu())
                 / completed_events
             )
         write_scalars(writer, metrics, step * wrapped_env.num_envs)

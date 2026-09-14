@@ -13,15 +13,15 @@ import torch
 
 from srb.integrations.rsl_rl.logging import SrbRslRlLogger
 from srb.integrations.rsl_rl.wrapper import SrbRslRlVecEnvWrapper
+from srb.integrations.tensorboard import canonical_tag
 from srb.utils import logging
 from srb.wrappers import maybe_wrap_action_smoothing
 
 if TYPE_CHECKING:
     import gymnasium
+    from isaacsim.simulation_app import SimulationApp
 
     from srb._typing import AnyEnv, AnyEnvCfg
-
-    from isaacsim.simulation_app import SimulationApp
 
 
 FRAMEWORK_NAME = "rsl_rl"
@@ -100,10 +100,10 @@ _CHECKPOINT_PATTERN = re.compile(r"^model_(\d+)\.pt$")
 def run(
     workflow: Literal["train", "eval"],
     algo: str,
-    env: "AnyEnv | gymnasium.Env",
-    sim_app: "SimulationApp",
+    env: AnyEnv | gymnasium.Env,
+    sim_app: SimulationApp,
     env_id: str,
-    env_cfg: "AnyEnvCfg | None",
+    env_cfg: AnyEnvCfg | None,
     agent_cfg: Mapping[str, Any] | object,
     logdir: Path,
     model: Path | None = None,
@@ -261,9 +261,13 @@ def _build_config(
             "RSL-RL config must define non-empty obs_groups for both actor and critic."
         )
     if not isinstance(cfg.get("actor"), Mapping) or not isinstance(cfg.get("critic"), Mapping):
-        raise ValueError("RSL-RL config must define actor and critic mappings.")
+        raise ValueError(  # noqa: TRY004
+            "RSL-RL config must define actor and critic mappings."
+        )
     if not isinstance(cfg.get("algorithm"), Mapping):
-        raise ValueError("RSL-RL config must define an algorithm mapping.")
+        raise ValueError(  # noqa: TRY004
+            "RSL-RL config must define an algorithm mapping."
+        )
 
     return cfg
 
@@ -387,12 +391,12 @@ def _evaluate(
                 _write_eval_step_metrics(writer, extras, global_step)
             if done.any():
                 writer.add_scalar(
-                    "eval/episode_reward",
+                    "eval/ep_rew_mean",
                     episode_returns[done].mean().item(),
                     global_step,
                 )
                 writer.add_scalar(
-                    "eval/episode_length",
+                    "eval/ep_len_mean",
                     episode_lengths[done].mean().item(),
                     global_step,
                 )
@@ -431,7 +435,7 @@ def _write_eval_step_metrics(writer: Any, extras: Mapping[str, Any], step: int) 
             continue
         scalar = _tensor_mean(value)
         if scalar is not None:
-            writer.add_scalar(f"eval/metrics/{name}", scalar, step)
+            writer.add_scalar(canonical_tag(f"eval/metrics/{name}"), scalar, step)
 
 
 def _write_eval_episode_metrics(
@@ -448,6 +452,7 @@ def _write_eval_episode_metrics(
     completed = _tensor_sum(extras.get("metrics/episode_completed"))
     if completed is None or completed <= 0.0:
         return
+    writer.add_scalar("eval/metrics/episode_completed", completed, step)
     for source_name, target_name in names.items():
         value = _tensor_sum(extras.get(f"metrics/{source_name}"))
         if value is not None:
