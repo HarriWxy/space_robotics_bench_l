@@ -902,6 +902,14 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.fpo import main as fpo
 
             fpo.run(workflow=WORKFLOW, **kwargs)
+        case _rsl_rl if algo.startswith("rsl_rl"):
+            from srb.integrations.rsl_rl import main as rsl_rl
+
+            rsl_rl.run(
+                workflow=WORKFLOW,
+                algo=algo.removeprefix("rsl_rl_") or "ppo",
+                **kwargs,
+            )
         case _skrl if algo.startswith("skrl"):
             from srb.integrations.skrl import main as skrl
 
@@ -944,6 +952,14 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.fpo import main as fpo
 
             fpo.run(workflow=WORKFLOW, **kwargs)
+        case _rsl_rl if algo.startswith("rsl_rl"):
+            from srb.integrations.rsl_rl import main as rsl_rl
+
+            rsl_rl.run(
+                workflow=WORKFLOW,
+                algo=algo.removeprefix("rsl_rl_") or "ppo",
+                **kwargs,
+            )
         case _skrl if algo.startswith("skrl"):
             from srb.integrations.skrl import main as skrl
 
@@ -2640,6 +2656,9 @@ class SupportedAlgo(str, Enum):
 
     # Flow Policy Optimization
     FPO = auto()
+
+    # Isaac Lab's RSL-RL PPO
+    RSL_RL_PPO = auto()
 
     # PyTorch direct-ratio ExO-PPO with one-step flow
     EXOPPO = auto()

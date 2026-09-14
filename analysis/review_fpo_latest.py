@@ -15,7 +15,7 @@ import numpy as np
 from tensorboard.compat.proto.event_pb2 import Event
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--algo", choices=("fpo", "exoppo", "sb3_ppo", "sb3_sac"), default="fpo")
+parser.add_argument("--algo", choices=("fpo", "exofpo", "exoppo", "sb3_ppo", "sb3_sac"), default="fpo")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 runs = root / "logs/locomotion_velocity_tracking_c" / args.algo

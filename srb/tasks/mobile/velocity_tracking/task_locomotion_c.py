@@ -1179,11 +1179,11 @@ def _compute_step_return(
                 "contact_forces_robot": contact_forces_robot,
             },
             "proprio": {
-                # "vel_lin_robot": vel_lin_robot,
-                # "vel_ang_robot": vel_ang_robot,
+                "vel_lin_robot": vel_lin_robot,
+                "vel_ang_robot": vel_ang_robot,
                 "projected_gravity_robot": projected_gravity_robot,
-                "imu_lin_acc": imu_lin_acc,
-                "imu_ang_vel": imu_ang_vel,
+                # "imu_lin_acc": imu_lin_acc,
+                # "imu_ang_vel": imu_ang_vel,
             },
             "proprio_dyn": {
                 "joint_pos_robot_normalized": joint_pos_robot_normalized,

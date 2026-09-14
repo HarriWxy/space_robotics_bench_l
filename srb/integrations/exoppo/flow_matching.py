@@ -737,7 +737,12 @@ class ExoFpoTrainer:
             maximum=self.config.cfm_diff_clamp_max,
         )
         ratio = log_ratio.exp()
-        recent_log_ratio = (recent_loss - old_loss).clamp(
+        # CFM loss is a negative-log-probability surrogate: lower loss means
+        # higher probability.  Keep the recent-policy center in the same
+        # direction as the behavior/current ratio above (old - recent), and
+        # apply the configured loss ceiling symmetrically.
+        recent_ratio_loss = self._clamp_loss(recent_loss)
+        recent_log_ratio = (old_loss - recent_ratio_loss).clamp(
             -self.config.max_log_ratio, self.config.max_log_ratio
         )
         recent_ratio = recent_log_ratio.exp().detach()

@@ -24,6 +24,7 @@ SUPPORTED_FRAMEWORKS = {
     "exofpo": {"multi_algo": False},
     "fpo": {"multi_algo": False},
     "policyflow": {"multi_algo": False},
+    "rsl_rl": {"multi_algo": True},
     "sb3": {"multi_algo": True},
     "sbx": {"multi_algo": True},
     "skrl": {"multi_algo": True},
