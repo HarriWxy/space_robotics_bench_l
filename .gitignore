@@ -13,6 +13,8 @@ wheels/
 .agents
 *cache
 nohup.out
+uv.lock
+.python-version
 
 
 ## Rust
