@@ -22,7 +22,7 @@ from typing import Any
 
 DEFAULT_ISAACLAB_ROOT = Path("/root/isaaclab")
 DEFAULT_FPO_ROOT = Path("/root/R2A/Algos/fpo-control-saa/isaaclab_experiments/isaaclab_fpo")
-DEFAULT_TASK = "Isaac-Velocity-Flat-H1"
+DEFAULT_TASK = "Isaac-Velocity-Rough-H1"
 DEFAULT_NUM_ENVS = 256
 DEFAULT_EVAL_NUM_ENVS = 8
 DEFAULT_SEED = 0
@@ -56,6 +56,13 @@ _RUNNER_CONFIG_KEYS = (
     "load_run",
     "load_checkpoint",
 )
+
+
+def _configure_torch_matmul_precision() -> None:
+    """Enable TF32-backed float32 matmuls before building the policy."""
+    import torch
+
+    torch.set_float32_matmul_precision("high")
 
 
 def _positive_int(value: str) -> int:
@@ -108,7 +115,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-iterations", "--max_iterations", dest="max_iterations", type=_positive_int)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--experiment-name", "--experiment_name", dest="experiment_name")
+    parser.add_argument("--experiment-name", "--experiment_name", dest="experiment_name",default=DEFAULT_TASK.split("-")[2])
     parser.add_argument("--run-name", "--run_name", dest="run_name", default=DEFAULT_RUN_NAME)
     parser.add_argument("--log-root", "--log_root", dest="log_root", type=Path, default=None)
     parser.add_argument("--save-interval", "--save_interval", dest="save_interval", type=_positive_int)
@@ -304,7 +311,7 @@ def _prepare_env_cfg(args: argparse.Namespace, agent_cfg: Any):
 
 
 def _write_run_files(log_dir: Path, env_cfg: Any, agent_cfg: Any, task: str) -> None:
-    from isaaclab.utils.io import dump_pickle, dump_yaml
+    from isaaclab.utils.io import  dump_yaml
 
     from isaaclab_rl.entrypoints.common import write_run_manifest
 
@@ -316,11 +323,11 @@ def _write_run_files(log_dir: Path, env_cfg: Any, agent_cfg: Any, task: str) -> 
     )
     dump_yaml(str(log_dir / "params" / "env.yaml"), env_cfg)
     dump_yaml(str(log_dir / "params" / "agent.yaml"), agent_cfg)
-    dump_pickle(str(log_dir / "params" / "env.pkl"), env_cfg)
-    dump_pickle(str(log_dir / "params" / "agent.pkl"), agent_cfg)
 
 
 def _run(args: argparse.Namespace) -> int:
+    _configure_torch_matmul_precision()
+
     isaaclab_root = args.isaaclab_root.expanduser().resolve()
     if not (isaaclab_root / "pyproject.toml").is_file():
         raise FileNotFoundError(f"Isaac Lab checkout not found: {isaaclab_root}")
@@ -373,10 +380,10 @@ def _run(args: argparse.Namespace) -> int:
     from isaaclab.app import launch_simulation
 
     import gymnasium as gym
-    from isaaclab_fpo import FpoRslRlVecEnvWrapper
-    from isaaclab_fpo.runners import OnPolicyRunner
 
     with launch_simulation(env_cfg, args):
+        from isaaclab_fpo import FpoRslRlVecEnvWrapper
+        from isaaclab_fpo.runners import OnPolicyRunner
         env = gym.make(args.task, cfg=env_cfg, render_mode="rgb_array" if args.video else None)
         try:
             if args.video:
