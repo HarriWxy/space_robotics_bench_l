@@ -448,6 +448,8 @@ def _write_eval_episode_metrics(
         "episode_failed": "eval/episode_failure_rate",
         "episode_tracking_fraction": "eval/episode_tracking_fraction",
         "episode_duration_s": "eval/episode_duration_s",
+        "episode_torso_contact_rate": "eval/episode_torso_contact_rate",
+        "episode_foot_slip_speed": "eval/episode_foot_slip_speed",
     }
     completed = _tensor_sum(extras.get("metrics/episode_completed"))
     if completed is None or completed <= 0.0:

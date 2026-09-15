@@ -61,8 +61,8 @@ class GroundEnvCfg(MobileEnvCfg):
     events: GroundEventCfg = GroundEventCfg()
 
     ## Time
-    env_rate: float = 1.0 / 50.0
-    agent_rate: float = 1.0 / 25.0
+    env_rate: float = 1.0 / 200.0
+    agent_rate: float = 1.0 / 50.0
 
     ## Viewer
     visualizer: KitVisualizerCfg = KitVisualizerCfg(

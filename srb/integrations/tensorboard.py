@@ -635,6 +635,14 @@ def make_policyflow_tensorboard_cb(directory: str):
                         "episode_duration_s", 0.0
                     )
                     / completed,
+                    "rollout/episode_torso_contact_rate": episode_events.get(
+                        "episode_torso_contact_rate", 0.0
+                    )
+                    / completed,
+                    "rollout/episode_foot_slip_speed": episode_events.get(
+                        "episode_foot_slip_speed", 0.0
+                    )
+                    / completed,
                 },
                 step,
             )

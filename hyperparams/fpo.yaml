@@ -21,7 +21,7 @@ load_run: ".*"
 load_checkpoint: "model_.*.pt"
 
 obs:
-  actor_keys: [proprio, proprio_dyn, command]
+  actor_keys: [proprio, command, proprio_dyn]
   critic_keys: null
 
 dynamics_encoder:

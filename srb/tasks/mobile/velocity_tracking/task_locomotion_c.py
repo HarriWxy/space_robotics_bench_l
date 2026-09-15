@@ -7,17 +7,27 @@ import torch
 
 from srb import assets
 from srb._typing import StepReturn
-from srb.core.asset import AssetVariant, Humanoid, LeggedRobot
+from srb.core.asset import (
+    AssetVariant,
+    Humanoid,
+    LeggedRobot,
+    MobileRobot,
+    Scenery,
+)
+from srb.core.domain import Domain
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import (
-    push_by_setting_velocity,  # noqa: F401
+    push_by_setting_velocity,
     randomize_gravity_stratified,
     randomize_gravity_uniform,
+    randomize_rigid_body_mass,
+    randomize_rigid_body_material,
     reset_joints_by_scale,
+    reset_root_state_uniform,
 )
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
+from srb.utils.math import matrix_from_quat, rotmat_to_rot6d
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
 
@@ -31,27 +41,31 @@ class LocomotionCurriculumCfg:
     """Training stages expressed in total simulated environment transitions."""
 
     enabled: bool = False
-    fixed_stage: int = 2
-    # Keep the historical forward-only demonstration available explicitly.  The
-    # curriculum sampler is used for the paper runs and can be selected with
-    # ``env.curriculum.command_mode=omnidirectional``.
-    command_mode: Literal["forward", "omnidirectional"] = "forward"
+    fixed_stage: int = 0
+    # ``forward`` and ``omnidirectional`` retain the SRB samplers.  The
+    # ``isaac_flat`` mode follows Isaac Lab H1 Flat's command ranges:
+    # vx in [0, 1], vy = 0, wz in [-1, 1].
+    command_mode: Literal["forward", "omnidirectional", "isaac_flat"] = "isaac_flat"
     forward_command: tuple[float, float, float] = (0.35, 0.0, 0.0)
     stage_env_steps: tuple[int, int] = (20_000_000, 60_000_000)
     linear_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 1.0)
     lateral_velocity_scales: tuple[float, float, float] = (0.0, 0.5, 1.0)
-    angular_velocity_magnitudes: tuple[float, float, float] = (0.35, 0.6, 0.15)
-    zero_command_probabilities: tuple[float, float, float] = (0.25, 0.1, 0.05)
+    angular_velocity_magnitudes: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    zero_command_probabilities: tuple[float, float, float] = (0.02, 0.02, 0.02)
+    heading_command: bool = True
+    heading_ranges: tuple[float, float] = (-torch.pi, torch.pi)
+    heading_control_stiffness: float = 0.5
+    rel_heading_envs: float = 1.0
     command_interval_ranges: tuple[
         tuple[float, float],
         tuple[float, float],
         tuple[float, float],
-    ] = ((2.0, 4.0), (1.0, 3.0), (4.0, 5.0))
+    ] = ((10.0, 10.0), (10.0, 10.0), (10.0, 10.0))
     joint_position_ranges: tuple[
         tuple[float, float],
         tuple[float, float],
         tuple[float, float],
-    ] = ((0.9, 1.1), (0.75, 1.25), (0.5, 1.5))
+    ] = ((1.0, 1.0), (1.0, 1.0), (1.0, 1.0))
     joint_velocity_range: tuple[float, float] = (0.0, 0.0)
 
 
@@ -74,37 +88,59 @@ class PhysicsConditioningCfg:
 
 @configclass
 class LocomotionRewardCfg:
-    action_rate_weight: float = -0.25
-    joint_torque_weight: float = -0.000025
+    # These are the H1 Flat weights where the SRB term has a close equivalent.
+    action_rate_weight: float = -0.005
+    joint_torque_weight: float = 0.0
     joint_torque_max_penalty: float = -4.0
-    joint_acceleration_weight: float = -0.00000025
+    joint_acceleration_weight: float = -0.000000125
     joint_acceleration_max_penalty: float = -2.0
-    undesired_contact_weight: float = -1.0
+    undesired_contact_weight: float = 0.0
     undesired_contact_force_threshold: float = 5.0
-    command_linear_weight: float = 3.0
-    command_linear_exp_std: float = 0.5
-    command_angular_weight: float = 1.5
+    command_linear_weight: float = 1.0
+    command_linear_exp_std: float = 0.25
+    command_angular_weight: float = 1.0
     command_angular_exp_std: float = 0.25
-    feet_air_time_weight: float = 0.2
-    feet_air_time_target: float = 0.35
+    feet_air_time_weight: float = 1.0
+    feet_air_time_target: float = 0.6
     moving_command_threshold: float = 0.1
-    foot_slip_weight: float = -0.1
+    foot_slip_weight: float = -0.25
     foot_slip_contact_force_threshold: float = 1.0
     foot_slip_max_penalty: float = -2.0
-    undesired_linear_velocity_z_weight: float = -0.5
-    undesired_angular_velocity_xy_weight: float = -0.1
-    gravity_alignment_weight: float = -2.0
+    undesired_linear_velocity_z_weight: float = -2.0
+    undesired_angular_velocity_xy_weight: float = -0.05
+    gravity_alignment_weight: float = -1.0
+    termination_penalty: float = -200.0
+    joint_pos_limit_weight: float = -1.0
+    joint_deviation_hip_weight: float = -0.2
+    joint_deviation_arms_weight: float = -0.2
+    joint_deviation_torso_weight: float = -0.1
+
+
+@configclass
+class LocomotionObservationCfg:
+    """Observation corruption matching Isaac Lab's H1 Flat policy group."""
+
+    enable_corruption: bool = True
+    base_lin_vel_noise: tuple[float, float] = (-0.1, 0.1)
+    base_ang_vel_noise: tuple[float, float] = (-0.2, 0.2)
+    projected_gravity_noise: tuple[float, float] = (-0.05, 0.05)
+    joint_pos_noise: tuple[float, float] = (-0.01, 0.01)
+    joint_vel_noise: tuple[float, float] = (-1.5, 1.5)
 
 
 @configclass
 class LocomotionTerminationCfg:
-    min_base_height: float = 0.3
-    min_body_up_z: float = 0.3
-    tracking_linear_error_threshold: float = 0.25
-    tracking_angular_error_threshold: float = 0.25
-    tracking_min_body_up_z: float = 0.8
-    success_min_duration_s: float = 30.0
-    success_settle_time_s: float = 1.0
+    # Isaac H1 Flat terminates on timeout or torso contact.  Keep the old
+    # height/orientation checks disabled by default and retain them as opt-in
+    # safety checks for other SRB legged assets.
+    min_base_height: float = 0.0
+    min_body_up_z: float = -1.0
+    base_contact_force_threshold: float = 1.0
+    tracking_linear_error_threshold: float = 0.5
+    tracking_angular_error_threshold: float = 0.8
+    tracking_min_body_up_z: float = -1.0
+    success_min_duration_s: float = 20.0
+    success_settle_time_s: float = 0.0
     success_tracking_fraction: float = 0.9
 
 
@@ -157,6 +193,9 @@ def randomize_velocity_command_curriculum(
     angular_velocity_magnitudes: tuple[float, ...],
     zero_command_probabilities: tuple[float, ...],
     command_interval_ranges: tuple[tuple[float, float], ...],
+    heading_command: bool,
+    heading_ranges: tuple[float, float],
+    rel_heading_envs: float,
 ):
     """Sample body-frame commands from the active curriculum stage."""
 
@@ -199,9 +238,24 @@ def randomize_velocity_command_curriculum(
         command[env_ids, 2] = angular_velocity_magnitudes[stage] * (
             2.0 * torch.rand(num_commands, device=unwrapped_env.device) - 1.0
         )
+    elif command_mode == "isaac_flat":
+        # Isaac Lab H1 Flat: x command in [0, 1] m/s, no lateral command and
+        # yaw command in [-1, 1] rad/s.  The yaw value is post-processed by
+        # LocomotionTask._update_heading_command when heading control is on.
+        command[env_ids, 0] = torch.rand(
+            num_commands,
+            dtype=command.dtype,
+            device=unwrapped_env.device,
+        )
+        command[env_ids, 1] = 0.0
+        command[env_ids, 2] = 2.0 * torch.rand(
+            num_commands,
+            dtype=command.dtype,
+            device=unwrapped_env.device,
+        ) - 1.0
     else:
         raise ValueError(
-            "command_mode must be either 'forward' or 'omnidirectional', got "
+            "command_mode must be 'forward', 'omnidirectional', or 'isaac_flat', got "
             f"{command_mode!r}"
         )
 
@@ -209,6 +263,22 @@ def randomize_velocity_command_curriculum(
         torch.rand(num_commands, device=unwrapped_env.device)
         < zero_command_probabilities[stage]
     )
+    if hasattr(unwrapped_env, "_heading_target"):
+        unwrapped_env._heading_target[env_ids] = torch.empty(
+            num_commands,
+            dtype=command.dtype,
+            device=unwrapped_env.device,
+        ).uniform_(heading_ranges[0], heading_ranges[1])
+        if heading_command:
+            unwrapped_env._heading_enabled[env_ids] = (
+                torch.rand(num_commands, device=unwrapped_env.device)
+                <= rel_heading_envs
+            )
+        else:
+            unwrapped_env._heading_enabled[env_ids] = False
+        unwrapped_env._standing_command[env_ids] = zero_command_mask
+        unwrapped_env._command_resampled[env_ids] = True
+
     command[env_ids[zero_command_mask]] = 0.0
 
     # EventManager reads this object again before it samples the next interval.
@@ -246,22 +316,65 @@ def reset_joints_by_scale_curriculum(
 
 @configclass
 class LocomotionEventCfg(EventCfg):
+    # Match Isaac Lab H1's fixed Flat-domain startup randomization.
+    physics_material: EventTermCfg = EventTermCfg(
+        func=randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.8, 0.8),
+            "dynamic_friction_range": (0.6, 0.6),
+            "restitution_range": (0.0, 0.0),
+            "num_buckets": 64,
+        },
+    )
+    add_base_mass: EventTermCfg = EventTermCfg(
+        func=randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+            "mass_distribution_params": (1.0 / 1.25, 1.25),
+            "operation": "scale",
+            "distribution": "log_uniform",
+        },
+    )
+    randomize_robot_state: EventTermCfg = EventTermCfg(
+        func=reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "pose_range": {
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+                "z": (0.0, 0.0),
+                "yaw": (-torch.pi, torch.pi),
+            },
+            "velocity_range": {
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+                "z": (-0.5, 0.5),
+                "roll": (-0.5, 0.5),
+                "pitch": (-0.5, 0.5),
+                "yaw": (-0.5, 0.5),
+            },
+        },
+    )
     command: EventTermCfg = EventTermCfg(
         func=randomize_velocity_command_curriculum,
         mode="interval",
-        interval_range_s=(2.0, 4.0),
+        interval_range_s=(10.0, 10.0),
         params={
             "env_attr_name": "_command",
-            "curriculum_enabled": True,
-            "fixed_stage": 2,
-            "command_mode": "forward",
+            "curriculum_enabled": False,
+            "fixed_stage": 0,
+            "command_mode": "isaac_flat",
             "forward_command": (0.35, 0.0, 0.0),
             "stage_env_steps": (20_000_000, 60_000_000),  # total 100_000_000
             "linear_velocity_magnitudes": (0.35, 0.6, 1.0),
             "lateral_velocity_scales": (0.0, 0.5, 1.0),
-            "angular_velocity_magnitudes": (0.35, 0.6, 1.0),
-            "zero_command_probabilities": (0.25, 0.1, 0.05),
-            "command_interval_ranges": ((2.0, 4.0), (1.0, 3.0), (0.5, 5.0)),
+            "angular_velocity_magnitudes": (1.0, 1.0, 1.0),
+            "zero_command_probabilities": (0.02, 0.02, 0.02),
+            "command_interval_ranges": ((10.0, 10.0), (10.0, 10.0), (10.0, 10.0)),
         },
     )
     randomize_robot_joints: EventTermCfg = EventTermCfg(
@@ -269,19 +382,37 @@ class LocomotionEventCfg(EventCfg):
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot"),
-            "curriculum_enabled": True,
-            "fixed_stage": 2,
+            "curriculum_enabled": False,
+            "fixed_stage": 0,
             "stage_env_steps": (20_000_000, 60_000_000),
-            "joint_position_ranges": ((0.9, 1.1), (0.75, 1.25), (0.5, 1.5)),
+            "joint_position_ranges": ((1.0, 1.0), (1.0, 1.0), (1.0, 1.0)),
             "velocity_range": (0.0, 0.0),
+        },
+    )
+    push_robot: EventTermCfg = EventTermCfg(
+        func=push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(10.0, 15.0),
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "velocity_range": {
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
+            },
         },
     )
 
 
 @configclass
 class LocomotionTaskCfg(TaskCfg):
+    ## Isaac Lab H1 Flat baseline defaults
+    # domain: Domain = Domain.EARTH # keep moon
+    # scenery: Scenery | MobileRobot | AssetVariant | None = assets.GroundPlane()
+    stack: bool = False
+    spacing: float = 2.5
+
     ## Assets
-    robot: LeggedRobot | Humanoid | AssetVariant = assets.Spot()
+    robot: LeggedRobot | Humanoid | AssetVariant = assets.UnitreeH1()
     _robot: LeggedRobot = MISSING  # type: ignore
 
     ## Scene
@@ -295,6 +426,7 @@ class LocomotionTaskCfg(TaskCfg):
     physics_conditioning: PhysicsConditioningCfg = PhysicsConditioningCfg()
     rewards: LocomotionRewardCfg = LocomotionRewardCfg()
     terminations: LocomotionTerminationCfg = LocomotionTerminationCfg()
+    observations: LocomotionObservationCfg = LocomotionObservationCfg()
 
     ## Optional physics conditioning
     # ``projected_gravity_robot`` carries direction but not magnitude.  This
@@ -306,7 +438,9 @@ class LocomotionTaskCfg(TaskCfg):
     gravity_magnitude_reference: float = 9.80665
 
     ## Time
-    env_rate: float = 1.0 / 125.0
+    env_rate: float = 1.0 / 200.0
+    agent_rate: float = 1.0 / 50.0
+    episode_length_s: float = 20.0
 
     ## Visualization
     command_vis: bool = True
@@ -317,6 +451,11 @@ class LocomotionTaskCfg(TaskCfg):
         self._validate_curriculum()
         self._validate_physics_conditioning()
         self._configure_physics_conditioning()
+
+        # Isaac Lab's Flat baseline uses fixed Earth gravity.  SRB's base
+        # event config otherwise adds the domain's small gravity variation.
+        if self.physics_conditioning.gravity_magnitude_range is None:
+            self.events.randomize_gravity = None
 
         # Sensor: Robot contacts
         self.scene.contacts_robot.prim_path = f"{self.scene.robot.prim_path}/.*"
@@ -343,6 +482,9 @@ class LocomotionTaskCfg(TaskCfg):
                     self.curriculum.zero_command_probabilities
                 ),
                 "command_interval_ranges": self.curriculum.command_interval_ranges,
+                "heading_command": self.curriculum.heading_command,
+                "heading_ranges": self.curriculum.heading_ranges,
+                "rel_heading_envs": self.curriculum.rel_heading_envs,
             }
         )
         self.events.randomize_robot_joints.params.update(
@@ -375,9 +517,13 @@ class LocomotionTaskCfg(TaskCfg):
             )
         if not 0 <= self.curriculum.fixed_stage < num_stages:
             raise ValueError("fixed_stage must refer to an existing curriculum stage.")
-        if self.curriculum.command_mode not in ("forward", "omnidirectional"):
+        if self.curriculum.command_mode not in (
+            "forward",
+            "omnidirectional",
+            "isaac_flat",
+        ):
             raise ValueError(
-                "command_mode must be either 'forward' or 'omnidirectional'."
+                "command_mode must be 'forward', 'omnidirectional', or 'isaac_flat'."
             )
         if len(self.curriculum.forward_command) != 3:
             raise ValueError("forward_command must contain exactly (vx, vy, wz).")
@@ -404,6 +550,20 @@ class LocomotionTaskCfg(TaskCfg):
             for probability in self.curriculum.zero_command_probabilities
         ):
             raise ValueError("zero_command_probabilities must be in [0, 1].")
+        if len(self.curriculum.heading_ranges) != 2 or not all(
+            isfinite(float(value)) for value in self.curriculum.heading_ranges
+        ):
+            raise ValueError("heading_ranges must contain two finite values.")
+        if self.curriculum.heading_ranges[1] < self.curriculum.heading_ranges[0]:
+            raise ValueError("heading_ranges must be ordered as (min, max).")
+        if not isfinite(float(self.curriculum.heading_control_stiffness)) or (
+            self.curriculum.heading_control_stiffness < 0.0
+        ):
+            raise ValueError(
+                "heading_control_stiffness must be finite and non-negative."
+            )
+        if not 0.0 <= self.curriculum.rel_heading_envs <= 1.0:
+            raise ValueError("rel_heading_envs must be in [0, 1].")
         if any(
             lower <= 0.0 or upper < lower
             for lower, upper in self.curriculum.command_interval_ranges
@@ -583,14 +743,17 @@ class LocomotionTask(Task):
         self._success_tracking_steps = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device
         )
+        self._success_torso_contact_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_foot_slip_speed_sum = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
         self._success_had_termination = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device
         )
         self._success_grace_steps = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device
-        )
-        self._success_last_command = torch.zeros(
-            self.num_envs, 3, dtype=torch.float32, device=self.device
         )
         self._success_last_accounted_step = -1
         self._success_min_steps = ceil(
@@ -598,6 +761,23 @@ class LocomotionTask(Task):
         )
         self._success_settle_steps = ceil(
             self.cfg.terminations.success_settle_time_s / max(self.step_dt, 1.0e-6)
+        )
+
+        # Isaac Lab's UniformVelocityCommand keeps these command states
+        # separate from the public velocity command: the target heading and
+        # the per-environment heading/standing masks are sampled at command
+        # resampling time, while the yaw command is updated every step.
+        self._heading_target = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
+        self._heading_enabled = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._standing_command = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._command_resampled = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
         )
 
         ## Get scene assets
@@ -616,9 +796,20 @@ class LocomotionTask(Task):
         self._undesired_contact_body_indices = [
             idx for idx in all_body_indices if idx not in self._feet_indices
         ]
+        # Isaac Lab's Unitree H1 Flat config uses torso_link for base-contact
+        # termination; this asset has no body named ``base``.
+        self._base_body_indices, _ = self._robot.find_bodies(".*torso_link.*")
+        self._ankle_joint_indices, _ = self._robot.find_joints(".*_ankle.*")
+        self._hip_joint_indices, _ = self._robot.find_joints(
+            [".*_hip_yaw", ".*_hip_roll"]
+        )
+        self._arm_joint_indices, _ = self._robot.find_joints(
+            [".*_shoulder_.*", ".*_elbow.*"]
+        )
+        self._torso_joint_indices, _ = self._robot.find_joints(".*torso.*")
         self._resample_commands(torch.arange(self.num_envs, device=self.device))
-        self._success_last_command.copy_(self._command)
         self._success_grace_steps.fill_(self._success_settle_steps)
+        self._command_resampled.zero_()
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
@@ -631,9 +822,11 @@ class LocomotionTask(Task):
             self._success_episode_steps[ids] = 0
             self._success_valid_steps[ids] = 0
             self._success_tracking_steps[ids] = 0
+            self._success_torso_contact_steps[ids] = 0
+            self._success_foot_slip_speed_sum[ids] = 0.0
             self._success_had_termination[ids] = False
             self._success_grace_steps[ids] = self._success_settle_steps
-            self._success_last_command[ids] = self._command[ids]
+            self._command_resampled[ids] = False
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Update episode-level locomotion success before automatic reset."""
@@ -649,12 +842,9 @@ class LocomotionTask(Task):
             return terminated, truncated
         self._success_last_accounted_step = current_step
 
-        command_changed = torch.any(
-            torch.abs(self._command - self._success_last_command) > 1.0e-6,
-            dim=1,
-        )
+        command_changed = self._command_resampled.clone()
+        self._command_resampled.zero_()
         self._success_grace_steps[command_changed] = self._success_settle_steps
-        self._success_last_command.copy_(self._command)
 
         grace_active = self._success_grace_steps > 0
         self._success_grace_steps.sub_(grace_active.to(dtype=torch.long))
@@ -675,11 +865,40 @@ class LocomotionTask(Task):
         self._success_tracking_steps += (valid_step & tracking_success).to(
             dtype=torch.long
         )
+        torso_contact = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        foot_slip_speed = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
+        if self._step_return.info is not None:
+            raw_torso_contact = self._step_return.info.get(
+                "metrics/torso_contact"
+            )
+            if raw_torso_contact is not None:
+                torso_contact = raw_torso_contact.to(dtype=torch.bool)
+            raw_foot_slip_speed = self._step_return.info.get(
+                "metrics/foot_slip_speed"
+            )
+            if raw_foot_slip_speed is not None:
+                foot_slip_speed = raw_foot_slip_speed.to(dtype=torch.float32)
+        self._success_torso_contact_steps += (valid_step & torso_contact).to(
+            dtype=torch.long
+        )
+        self._success_foot_slip_speed_sum += torch.where(
+            valid_step,
+            foot_slip_speed,
+            torch.zeros_like(foot_slip_speed),
+        )
         self._success_had_termination |= terminated
 
         completed = terminated | truncated
         valid_steps = self._success_valid_steps.clamp_min(1)
         tracking_fraction = self._success_tracking_steps.to(torch.float32) / valid_steps
+        torso_contact_rate = (
+            self._success_torso_contact_steps.to(torch.float32) / valid_steps
+        )
+        foot_slip_speed_mean = self._success_foot_slip_speed_sum / valid_steps
         success = (
             completed
             & truncated
@@ -706,6 +925,16 @@ class LocomotionTask(Task):
                     self._success_episode_steps.to(torch.float32) * self.step_dt,
                     torch.zeros(self.num_envs, device=self.device),
                 ),
+                "metrics/episode_torso_contact_rate": torch.where(
+                    completed,
+                    torso_contact_rate,
+                    torch.zeros_like(torso_contact_rate),
+                ),
+                "metrics/episode_foot_slip_speed": torch.where(
+                    completed,
+                    foot_slip_speed_mean,
+                    torch.zeros_like(foot_slip_speed_mean),
+                ),
             }
         )
         return terminated, truncated
@@ -725,7 +954,89 @@ class LocomotionTask(Task):
             **self.cfg.events.command.params,
         )
 
+    def _update_heading_command(
+        self, env_ids: torch.Tensor | None = None
+    ) -> None:
+        """Apply Isaac Lab's heading-to-yaw controller to Flat commands."""
+
+        if (
+            self.cfg.curriculum.command_mode != "isaac_flat"
+            or not self.cfg.curriculum.heading_command
+        ):
+            return
+
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        heading_env_ids = env_ids[self._heading_enabled[env_ids]]
+        if heading_env_ids.numel() > 0:
+            heading_error = torch.remainder(
+                self._heading_target[heading_env_ids]
+                - self._robot.data.heading_w.torch[heading_env_ids]
+                + torch.pi,
+                2.0 * torch.pi,
+            ) - torch.pi
+            stage = _resolve_curriculum_stage(
+                self,
+                curriculum_enabled=self.cfg.curriculum.enabled,
+                fixed_stage=self.cfg.curriculum.fixed_stage,
+                stage_env_steps=self.cfg.curriculum.stage_env_steps,
+            )
+            yaw_limit = abs(
+                float(self.cfg.curriculum.angular_velocity_magnitudes[stage])
+            )
+            self._command[heading_env_ids, 2] = torch.clamp(
+                self.cfg.curriculum.heading_control_stiffness * heading_error,
+                min=-yaw_limit,
+                max=yaw_limit,
+            )
+
+        standing_env_ids = env_ids[self._standing_command[env_ids]]
+        if standing_env_ids.numel() > 0:
+            self._command[standing_env_ids] = 0.0
+
+    @staticmethod
+    def _add_uniform_observation_noise(
+        value: torch.Tensor,
+        bounds: tuple[float, float],
+    ) -> torch.Tensor:
+        lower, upper = bounds
+        if lower == upper:
+            return value
+        return value + torch.empty_like(value).uniform_(lower, upper)
+
+    def _apply_observation_noise(self, step_return: StepReturn) -> None:
+        """Apply Isaac Lab H1 Flat's uniform policy observation corruption."""
+
+        if not self.cfg.observations.enable_corruption:
+            return
+        observations = step_return.observation
+        proprio = observations["proprio"]
+        proprio_dyn = observations["proprio_dyn"]
+        proprio["00_base_lin_vel"] = self._add_uniform_observation_noise(
+            proprio["00_base_lin_vel"],
+            self.cfg.observations.base_lin_vel_noise,
+        )
+        proprio["01_base_ang_vel"] = self._add_uniform_observation_noise(
+            proprio["01_base_ang_vel"],
+            self.cfg.observations.base_ang_vel_noise,
+        )
+        proprio["02_projected_gravity"] = self._add_uniform_observation_noise(
+            proprio["02_projected_gravity"],
+            self.cfg.observations.projected_gravity_noise,
+        )
+        proprio_dyn["00_joint_pos"] = self._add_uniform_observation_noise(
+            proprio_dyn["00_joint_pos"],
+            self.cfg.observations.joint_pos_noise,
+        )
+        proprio_dyn["01_joint_vel"] = self._add_uniform_observation_noise(
+            proprio_dyn["01_joint_vel"],
+            self.cfg.observations.joint_vel_noise,
+        )
+
     def extract_step_return(self) -> StepReturn:
+        self._update_heading_command()
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
@@ -754,8 +1065,20 @@ class LocomotionTask(Task):
             posinf=0.0,
             neginf=0.0,
         )
+        vel_lin_world_robot = torch.nan_to_num(
+            self._robot.data.root_lin_vel_w.torch,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         vel_ang_robot = torch.nan_to_num(
             self._robot.data.root_ang_vel_b.torch,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        vel_ang_world_z = torch.nan_to_num(
+            self._robot.data.root_ang_vel_w.torch[:, 2],
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
@@ -768,6 +1091,12 @@ class LocomotionTask(Task):
         )
         joint_pos_robot = torch.nan_to_num(
             self._robot.data.joint_pos.torch,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        joint_default_pos_robot = torch.nan_to_num(
+            self._robot.data.default_joint_pos.torch,
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
@@ -800,27 +1129,26 @@ class LocomotionTask(Task):
             posinf=0.0,
             neginf=0.0,
         )
-        contact_robot = self._contacts_robot.compute_first_contact(self.step_dt).torch
-        contact_last_air_time = torch.nan_to_num(
-            self._contacts_robot.data.last_air_time.torch,  # type: ignore
+        contact_forces_history_robot = torch.nan_to_num(
+            self._contacts_robot.data.net_normal_forces_w_history.torch,  # type: ignore
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
         )
-        foot_link_vel_w = torch.nan_to_num(
-            self._robot.data.body_link_vel_w.torch,
+        current_air_time_robot = torch.nan_to_num(
+            self._contacts_robot.data.current_air_time.torch,  # type: ignore
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
         )
-        imu_lin_acc = torch.nan_to_num(
-            self._imu_robot.data.lin_acc_b.torch,
+        current_contact_time_robot = torch.nan_to_num(
+            self._contacts_robot.data.current_contact_time.torch,  # type: ignore
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
         )
-        imu_ang_vel = torch.nan_to_num(
-            self._imu_robot.data.ang_vel_b.torch,
+        foot_body_vel_w = torch.nan_to_num(
+            self._robot.data.body_lin_vel_w.torch,
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
@@ -844,22 +1172,29 @@ class LocomotionTask(Task):
             tf_quat_robot=tf_quat_robot,
             tf_pos_robot=tf_pos_robot,
             vel_lin_robot=vel_lin_robot,
+            vel_lin_world_robot=vel_lin_world_robot,
             vel_ang_robot=vel_ang_robot,
+            vel_ang_world_z=vel_ang_world_z,
             projected_gravity_robot=projected_gravity_robot,
             joint_pos_robot=joint_pos_robot,
+            joint_default_pos_robot=joint_default_pos_robot,
             joint_pos_limits_robot=joint_pos_limits_robot,
             joint_vel_robot=joint_vel_robot,
             joint_acc_robot=joint_acc_robot,
             joint_applied_torque_robot=joint_applied_torque_robot,
             contact_forces_robot=contact_forces_robot,
-            contact_robot=contact_robot,
-            contact_last_air_time=contact_last_air_time,
-            foot_link_vel_w=foot_link_vel_w,
-            imu_lin_acc=imu_lin_acc,
-            imu_ang_vel=imu_ang_vel,
+            contact_forces_history_robot=contact_forces_history_robot,
+            current_air_time_robot=current_air_time_robot,
+            current_contact_time_robot=current_contact_time_robot,
+            foot_body_vel_w=foot_body_vel_w,
             ## Robot descriptors
             robot_feet_indices=self._feet_indices,
             robot_undesired_contact_body_indices=self._undesired_contact_body_indices,
+            robot_base_body_indices=self._base_body_indices,
+            robot_ankle_joint_indices=self._ankle_joint_indices,
+            robot_hip_joint_indices=self._hip_joint_indices,
+            robot_arm_joint_indices=self._arm_joint_indices,
+            robot_torso_joint_indices=self._torso_joint_indices,
             ## Command
             command=command,
             ## Rewards
@@ -893,10 +1228,20 @@ class LocomotionTask(Task):
                 self.cfg.rewards.undesired_angular_velocity_xy_weight
             ),
             gravity_alignment_weight=self.cfg.rewards.gravity_alignment_weight,
+            termination_penalty=self.cfg.rewards.termination_penalty,
+            joint_pos_limit_weight=self.cfg.rewards.joint_pos_limit_weight,
+            joint_deviation_hip_weight=self.cfg.rewards.joint_deviation_hip_weight,
+            joint_deviation_arms_weight=self.cfg.rewards.joint_deviation_arms_weight,
+            joint_deviation_torso_weight=self.cfg.rewards.joint_deviation_torso_weight,
             ## Terminations
             min_base_height=self.cfg.terminations.min_base_height,
             min_body_up_z=self.cfg.terminations.min_body_up_z,
+            base_contact_force_threshold=(
+                self.cfg.terminations.base_contact_force_threshold
+            ),
         )
+
+        self._apply_observation_noise(step_return)
 
         if (
             self.cfg.include_gravity_magnitude
@@ -906,7 +1251,7 @@ class LocomotionTask(Task):
                 self._gravity_magnitude / self.cfg.gravity_magnitude_reference
             ).unsqueeze(-1)
             if self.cfg.include_gravity_magnitude:
-                step_return.observation["proprio"]["gravity_magnitude"] = (
+                step_return.observation["proprio"]["03_gravity_magnitude"] = (
                     gravity_context
                 )
             if self.cfg.include_physics_context:
@@ -916,11 +1261,22 @@ class LocomotionTask(Task):
 
         tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
         body_up_z = tf_rotmat_robot[:, 2, 2]
-        linear_tracking_error = torch.norm(
-            command[:, :2] - vel_lin_robot[:, :2],
+        heading_cos = tf_rotmat_robot[:, 0, 0]
+        heading_sin = tf_rotmat_robot[:, 1, 0]
+        vel_lin_yaw_robot = torch.stack(
+            (
+                heading_cos * vel_lin_world_robot[:, 0]
+                + heading_sin * vel_lin_world_robot[:, 1],
+                -heading_sin * vel_lin_world_robot[:, 0]
+                + heading_cos * vel_lin_world_robot[:, 1],
+            ),
             dim=1,
         )
-        angular_tracking_error = torch.abs(command[:, 2] - vel_ang_robot[:, 2])
+        linear_tracking_error = torch.norm(
+            command[:, :2] - vel_lin_yaw_robot,
+            dim=1,
+        )
+        angular_tracking_error = torch.abs(command[:, 2] - vel_ang_world_z)
         tracking_success = (
             (
                 linear_tracking_error
@@ -943,17 +1299,59 @@ class LocomotionTask(Task):
             undesired_contact = (
                 torch.max(
                     torch.norm(
-                        contact_forces_robot[
-                            :, self._undesired_contact_body_indices, :
+                        contact_forces_history_robot[
+                            :, :, self._undesired_contact_body_indices, :
                         ],
                         dim=-1,
                     ),
                     dim=1,
                 )[0]
+                .max(dim=1)[0]
                 > self.cfg.rewards.undesired_contact_force_threshold
             )
         else:
             undesired_contact = torch.zeros(
+                self.num_envs,
+                dtype=torch.bool,
+                device=self.device,
+            )
+
+        feet_contact_force_history = torch.norm(
+            contact_forces_history_robot[:, :, self._feet_indices, :],
+            dim=-1,
+        ).max(dim=1)[0]
+        feet_in_contact = (
+            feet_contact_force_history
+            > self.cfg.rewards.foot_slip_contact_force_threshold
+        )
+        foot_slip_speed = torch.norm(
+            foot_body_vel_w[:, self._feet_indices, :2],
+            dim=-1,
+        )
+        foot_contact_count = feet_in_contact.to(dtype=foot_slip_speed.dtype).sum(
+            dim=1
+        )
+        foot_slip_speed = torch.where(
+            foot_contact_count > 0.0,
+            (
+                foot_slip_speed
+                * feet_in_contact.to(dtype=foot_slip_speed.dtype)
+            ).sum(dim=1)
+            / foot_contact_count.clamp_min(1.0),
+            torch.zeros_like(foot_contact_count),
+        )
+        if self._base_body_indices:
+            torso_contact = (
+                torch.norm(
+                    contact_forces_history_robot[:, :, self._base_body_indices, :],
+                    dim=-1,
+                )
+                .max(dim=1)[0]
+                .max(dim=1)[0]
+                > self.cfg.terminations.base_contact_force_threshold
+            )
+        else:
+            torso_contact = torch.zeros(
                 self.num_envs,
                 dtype=torch.bool,
                 device=self.device,
@@ -983,6 +1381,11 @@ class LocomotionTask(Task):
                 "metrics/terminated": step_return.termination.float(),
                 "metrics/truncated": step_return.truncation.float(),
                 "metrics/undesired_contact": undesired_contact.float(),
+                "metrics/torso_contact": torso_contact.float(),
+                # This is the mean horizontal foot speed for feet that are in
+                # contact according to the three-step history; it is zero
+                # when that history contains no contacting foot.
+                "metrics/foot_slip_speed": foot_slip_speed,
             },
         )
 
@@ -1001,22 +1404,29 @@ def _compute_step_return(
     tf_quat_robot: torch.Tensor,
     tf_pos_robot: torch.Tensor,
     vel_lin_robot: torch.Tensor,
+    vel_lin_world_robot: torch.Tensor,
     vel_ang_robot: torch.Tensor,
+    vel_ang_world_z: torch.Tensor,
     projected_gravity_robot: torch.Tensor,
     joint_pos_robot: torch.Tensor,
+    joint_default_pos_robot: torch.Tensor,
     joint_pos_limits_robot: torch.Tensor | None,
     joint_vel_robot: torch.Tensor,
     joint_acc_robot: torch.Tensor,
     joint_applied_torque_robot: torch.Tensor,
     contact_forces_robot: torch.Tensor,
-    contact_robot: torch.Tensor,
-    contact_last_air_time: torch.Tensor,
-    foot_link_vel_w: torch.Tensor,
-    imu_lin_acc: torch.Tensor,
-    imu_ang_vel: torch.Tensor,
+    contact_forces_history_robot: torch.Tensor,
+    current_air_time_robot: torch.Tensor,
+    current_contact_time_robot: torch.Tensor,
+    foot_body_vel_w: torch.Tensor,
     ## Robot descriptors
     robot_feet_indices: list[int],
     robot_undesired_contact_body_indices: list[int],
+    robot_base_body_indices: list[int],
+    robot_ankle_joint_indices: list[int],
+    robot_hip_joint_indices: list[int],
+    robot_arm_joint_indices: list[int],
+    robot_torso_joint_indices: list[int],
     ## Command
     command: torch.Tensor,
     ## Rewards
@@ -1040,9 +1450,15 @@ def _compute_step_return(
     undesired_linear_velocity_z_weight: float,
     undesired_angular_velocity_xy_weight: float,
     gravity_alignment_weight: float,
+    termination_penalty: float,
+    joint_pos_limit_weight: float,
+    joint_deviation_hip_weight: float,
+    joint_deviation_arms_weight: float,
+    joint_deviation_torso_weight: float,
     ## Terminations
     min_base_height: float,
     min_body_up_z: float,
+    base_contact_force_threshold: float,
 ) -> StepReturn:
     num_envs = episode_length.size(0)
     device = episode_length.device
@@ -1059,22 +1475,25 @@ def _compute_step_return(
     )
     tf_rotmat_robot = matrix_from_quat(tf_quat_robot)
     tf_rot6d_robot = rotmat_to_rot6d(tf_rotmat_robot)
-
-    joint_pos_robot_normalized = (
-        scale_transform(
-            joint_pos_robot,
-            joint_pos_limits_robot[:, :, 0],
-            joint_pos_limits_robot[:, :, 1],
-        )
-        if joint_pos_limits_robot is not None
-        else joint_pos_robot
+    heading_cos = tf_rotmat_robot[:, 0, 0]
+    heading_sin = tf_rotmat_robot[:, 1, 0]
+    vel_lin_yaw_robot = torch.stack(
+        (
+            heading_cos * vel_lin_world_robot[:, 0]
+            + heading_sin * vel_lin_world_robot[:, 1],
+            -heading_sin * vel_lin_world_robot[:, 0]
+            + heading_cos * vel_lin_world_robot[:, 1],
+        ),
+        dim=1,
     )
+
+    joint_pos_robot_rel = joint_pos_robot - joint_default_pos_robot
     contact_forces_mean_robot = contact_forces_robot.mean(dim=1)
 
     #############
     ## Rewards ##
     #############
-    penalty_action_rate = action_rate_weight * torch.mean(
+    penalty_action_rate = action_rate_weight * torch.sum(
         torch.square(act_current - act_previous),
         dim=1,
     )
@@ -1087,6 +1506,67 @@ def _compute_step_return(
         joint_acceleration_weight * torch.sum(torch.square(joint_acc_robot), dim=1),
         min=joint_acceleration_max_penalty,
     )
+    penalty_joint_pos_limits = torch.zeros(
+        num_envs,
+        dtype=vel_lin_robot.dtype,
+        device=device,
+    )
+    if joint_pos_limits_robot is not None and len(robot_ankle_joint_indices) > 0:
+        ankle_joint_pos = joint_pos_robot[:, robot_ankle_joint_indices]
+        ankle_joint_limits = joint_pos_limits_robot[:, robot_ankle_joint_indices, :]
+        joint_pos_violation = torch.clamp_min(
+            ankle_joint_limits[:, :, 0] - ankle_joint_pos,
+            0.0,
+        ) + torch.clamp_min(
+            ankle_joint_pos - ankle_joint_limits[:, :, 1],
+            0.0,
+        )
+        penalty_joint_pos_limits = joint_pos_limit_weight * torch.sum(
+            joint_pos_violation,
+            dim=1,
+        )
+
+    penalty_joint_deviation_hip = torch.zeros(
+        num_envs,
+        dtype=vel_lin_robot.dtype,
+        device=device,
+    )
+    if len(robot_hip_joint_indices) > 0:
+        penalty_joint_deviation_hip = joint_deviation_hip_weight * torch.sum(
+            torch.abs(
+                joint_pos_robot[:, robot_hip_joint_indices]
+                - joint_default_pos_robot[:, robot_hip_joint_indices]
+            ),
+            dim=1,
+        )
+
+    penalty_joint_deviation_arms = torch.zeros(
+        num_envs,
+        dtype=vel_lin_robot.dtype,
+        device=device,
+    )
+    if len(robot_arm_joint_indices) > 0:
+        penalty_joint_deviation_arms = joint_deviation_arms_weight * torch.sum(
+            torch.abs(
+                joint_pos_robot[:, robot_arm_joint_indices]
+                - joint_default_pos_robot[:, robot_arm_joint_indices]
+            ),
+            dim=1,
+        )
+
+    penalty_joint_deviation_torso = torch.zeros(
+        num_envs,
+        dtype=vel_lin_robot.dtype,
+        device=device,
+    )
+    if len(robot_torso_joint_indices) > 0:
+        penalty_joint_deviation_torso = joint_deviation_torso_weight * torch.sum(
+            torch.abs(
+                joint_pos_robot[:, robot_torso_joint_indices]
+                - joint_default_pos_robot[:, robot_torso_joint_indices]
+            ),
+            dim=1,
+        )
 
     penalty_undesired_robot_contacts = torch.zeros(
         num_envs,
@@ -1096,44 +1576,52 @@ def _compute_step_return(
     if len(robot_undesired_contact_body_indices) > 0:
         undesired_contact_force = torch.max(
             torch.norm(
-                contact_forces_robot[:, robot_undesired_contact_body_indices, :],
+                contact_forces_history_robot[
+                    :, :, robot_undesired_contact_body_indices, :
+                ],
                 dim=-1,
             ),
             dim=1,
         )[0]
         penalty_undesired_robot_contacts = undesired_contact_weight * (
-            undesired_contact_force > undesired_contact_force_threshold
+            torch.max(undesired_contact_force, dim=1)[0]
+            > undesired_contact_force_threshold
         )
 
     reward_cmd_lin_vel_xy = command_linear_weight * torch.exp(
-        -torch.sum(torch.square(command[:, :2] - vel_lin_robot[:, :2]), dim=1)
+        -torch.sum(torch.square(command[:, :2] - vel_lin_yaw_robot), dim=1)
         / command_linear_exp_std
     )
     reward_cmd_ang_vel_z = command_angular_weight * torch.exp(
-        -torch.square(command[:, 2] - vel_ang_robot[:, 2]) / command_angular_exp_std
+        -torch.square(command[:, 2] - vel_ang_world_z) / command_angular_exp_std
     )
 
     moving_command = torch.norm(command[:, :2], dim=1) > moving_command_threshold
-    reward_feet_air_time = (
-        feet_air_time_weight
-        * moving_command
-        * torch.sum(
-            torch.clamp_min(
-                contact_last_air_time[:, robot_feet_indices] - feet_air_time_target,
-                min=0.0,
-            )
-            * contact_robot[:, robot_feet_indices],
-            dim=1,
-        )
-    )
+    air_time = current_air_time_robot[:, robot_feet_indices]
+    contact_time = current_contact_time_robot[:, robot_feet_indices]
+    feet_in_contact = contact_time > 0.0
+    feet_in_mode_time = torch.where(feet_in_contact, contact_time, air_time)
+    single_stance = torch.sum(feet_in_contact.to(dtype=torch.int32), dim=1) == 1
+    reward_feet_air_time = torch.min(
+        torch.where(
+            single_stance.unsqueeze(-1),
+            feet_in_mode_time,
+            torch.zeros_like(feet_in_mode_time),
+        ),
+        dim=1,
+    )[0]
+    reward_feet_air_time = feet_air_time_weight * torch.clamp(
+        reward_feet_air_time,
+        max=feet_air_time_target,
+    ) * moving_command
 
     feet_contact_force = torch.norm(
-        contact_forces_robot[:, robot_feet_indices, :],
+        contact_forces_history_robot[:, :, robot_feet_indices, :],
         dim=-1,
-    )
+    ).max(dim=1)[0]
     feet_in_contact = feet_contact_force > foot_slip_contact_force_threshold
     foot_slip_speed = torch.norm(
-        foot_link_vel_w[:, robot_feet_indices, :2],
+        foot_body_vel_w[:, robot_feet_indices, :2],
         dim=-1,
     )
     penalty_foot_slip = torch.clamp_min(
@@ -1148,9 +1636,9 @@ def _compute_step_return(
         torch.square(vel_ang_robot[:, :2]),
         dim=1,
     )
-    penalty_gravity_rotation_alignment = gravity_alignment_weight * (
-        torch.sum(torch.square(projected_gravity_robot[:, :2]), dim=1)
-        + torch.square(projected_gravity_robot[:, 2] + 1.0)
+    penalty_gravity_rotation_alignment = gravity_alignment_weight * torch.sum(
+        torch.square(projected_gravity_robot[:, :2]),
+        dim=1,
     )
 
     ##################
@@ -1159,7 +1647,24 @@ def _compute_step_return(
     termination_fallen = tf_pos_robot[:, 2] < min_base_height
     body_up_z = tf_rotmat_robot[:, 2, 2]
     termination_bad_orientation = body_up_z < min_body_up_z
-    termination = termination_fallen | termination_bad_orientation
+    termination_base_contact = torch.zeros(
+        num_envs,
+        dtype=torch.bool,
+        device=device,
+    )
+    if len(robot_base_body_indices) > 0:
+        base_contact_force = torch.max(
+            torch.norm(
+                contact_forces_history_robot[:, :, robot_base_body_indices, :],
+                dim=-1,
+            ),
+            dim=1,
+        )[0]
+        base_contact_force = torch.max(base_contact_force, dim=1)[0]
+        termination_base_contact = base_contact_force > base_contact_force_threshold
+    termination = (
+        termination_fallen | termination_bad_orientation | termination_base_contact
+    )
     truncation = (
         episode_length >= max_episode_length
         if truncate_episodes
@@ -1179,27 +1684,31 @@ def _compute_step_return(
                 "contact_forces_robot": contact_forces_robot,
             },
             "proprio": {
-                "vel_lin_robot": vel_lin_robot,
-                "vel_ang_robot": vel_ang_robot,
-                "projected_gravity_robot": projected_gravity_robot,
-                # "imu_lin_acc": imu_lin_acc,
-                # "imu_ang_vel": imu_ang_vel,
+                # Prefixes make SRB's deterministic dict flattening match
+                # Isaac Lab H1 Flat's policy order.
+                "00_base_lin_vel": vel_lin_robot,
+                "01_base_ang_vel": vel_ang_robot,
+                "02_projected_gravity": projected_gravity_robot,
             },
             "proprio_dyn": {
-                "joint_pos_robot_normalized": joint_pos_robot_normalized,
-                "joint_vel_robot": joint_vel_robot,
+                "00_joint_pos": joint_pos_robot_rel,
+                "01_joint_vel": joint_vel_robot,
                 # "joint_acc_robot": joint_acc_robot,
                 # "joint_applied_torque_robot": joint_applied_torque_robot,
-                "act_previous": act_previous,
+                "02_actions": act_previous,
             },
             "command": {
-                "cmd_vel": command,
+                "00_velocity_commands": command,
             },
         },
         {
             "pen_action_rate": penalty_action_rate,
             "pen_joint_torque": penalty_joint_torque,
             "pen_joint_acceleration": penalty_joint_acceleration,
+            "pen_dof_pos_limits": penalty_joint_pos_limits,
+            "pen_joint_deviation_hip": penalty_joint_deviation_hip,
+            "pen_joint_deviation_arms": penalty_joint_deviation_arms,
+            "pen_joint_deviation_torso": penalty_joint_deviation_torso,
             "pen_und_robot_contacts": penalty_undesired_robot_contacts,
             "reward_cmd_lin_vel_xy": reward_cmd_lin_vel_xy,
             "reward_cmd_ang_vel_z": reward_cmd_ang_vel_z,
@@ -1208,6 +1717,8 @@ def _compute_step_return(
             "pen_und_lin_vel_z": penalty_undesired_lin_vel_z,
             "pen_und_ang_vel_xy": penalty_undesired_ang_vel_xy,
             "pen_gravity_rot_ali": penalty_gravity_rotation_alignment,
+            "pen_termination": termination_penalty
+            * termination.to(dtype=vel_lin_robot.dtype),
         },
         termination,
         truncation,

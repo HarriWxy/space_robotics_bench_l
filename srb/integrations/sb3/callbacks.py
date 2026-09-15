@@ -129,6 +129,15 @@ class RewardTermsTensorboardCallback(BaseCallback):
                     "rollout/episode_duration_s",
                     episode_events.get("episode_duration_s", 0.0) / completed,
                 ),
+                (
+                    "rollout/episode_torso_contact_rate",
+                    episode_events.get("episode_torso_contact_rate", 0.0)
+                    / completed,
+                ),
+                (
+                    "rollout/episode_foot_slip_speed",
+                    episode_events.get("episode_foot_slip_speed", 0.0) / completed,
+                ),
             ):
                 if self._tensorboard_writer is not None:
                     self._tensorboard_writer.add_scalar(

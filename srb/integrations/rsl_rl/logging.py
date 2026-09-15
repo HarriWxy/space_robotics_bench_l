@@ -24,6 +24,8 @@ class SrbRslRlLogger:
             "episode_failed",
             "episode_tracking_fraction",
             "episode_duration_s",
+            "episode_torso_contact_rate",
+            "episode_foot_slip_speed",
         }
     )
 
@@ -187,12 +189,15 @@ class SrbRslRlLogger:
         if episode_rates:
             logging.info(
                 "RSL-RL task metrics: completed=%d success_rate=%.4f "
-                "failure_rate=%.4f tracking_fraction=%.4f duration_s=%.4f",
+                "failure_rate=%.4f tracking_fraction=%.4f duration_s=%.4f "
+                "torso_contact_rate=%.4f foot_slip_speed=%.4f",
                 round(self._completed_episodes),
                 episode_rates["episode_success"],
                 episode_rates["episode_failed"],
                 episode_rates["episode_tracking_fraction"],
                 episode_rates["episode_duration_s"],
+                episode_rates["episode_torso_contact_rate"],
+                episode_rates["episode_foot_slip_speed"],
             )
 
         writer = getattr(self._logger, "writer", None)
@@ -219,6 +224,8 @@ class SrbRslRlLogger:
                 "episode_failed": "rollout/episode_failure_rate",
                 "episode_tracking_fraction": "rollout/episode_tracking_fraction",
                 "episode_duration_s": "rollout/episode_duration_s",
+                "episode_torso_contact_rate": "rollout/episode_torso_contact_rate",
+                "episode_foot_slip_speed": "rollout/episode_foot_slip_speed",
             }
             for name, tag in rates.items():
                 writer.add_scalar(tag, episode_rates[name], step)

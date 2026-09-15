@@ -167,6 +167,8 @@ def _aggregate_episode_event_logs(locs: dict[str, Any]) -> None:
         "rollout/metrics/episode_failed",
         "rollout/metrics/episode_tracking_fraction",
         "rollout/metrics/episode_duration_s",
+        "rollout/metrics/episode_torso_contact_rate",
+        "rollout/metrics/episode_foot_slip_speed",
     }
     sums: dict[str, torch.Tensor] = {}
     for episode_info in episode_infos:
@@ -216,6 +218,14 @@ def _aggregate_episode_event_logs(locs: dict[str, Any]) -> None:
     )
     first_info["rollout/episode_duration_s"] = (
         float(sums.get("rollout/metrics/episode_duration_s", 0.0)) / completed
+    )
+    first_info["rollout/episode_torso_contact_rate"] = (
+        float(sums.get("rollout/metrics/episode_torso_contact_rate", 0.0))
+        / completed
+    )
+    first_info["rollout/episode_foot_slip_speed"] = (
+        float(sums.get("rollout/metrics/episode_foot_slip_speed", 0.0))
+        / completed
     )
     first_info["rollout/metrics/episode_completed"] = completed
     locs["ep_infos"] = filtered_infos

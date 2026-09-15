@@ -396,6 +396,20 @@ def _collect_rollout(
             float(episode_event_sums.get("episode_duration_s", event_zero).cpu())
             / completed
         )
+        metrics["rollout/episode_torso_contact_rate"] = (
+            float(
+                episode_event_sums.get(
+                    "episode_torso_contact_rate", event_zero
+                ).cpu()
+            )
+            / completed
+        )
+        metrics["rollout/episode_foot_slip_speed"] = (
+            float(
+                episode_event_sums.get("episode_foot_slip_speed", event_zero).cpu()
+            )
+            / completed
+        )
     return rollout, actor_observation, critic_observation, metrics, step_count
 
 
@@ -717,6 +731,22 @@ def _evaluate(
             )
             metrics["eval/episode_duration_s"] = (
                 float(episode_event_sums.get("episode_duration_s", event_zero).cpu())
+                / completed_events
+            )
+            metrics["eval/episode_torso_contact_rate"] = (
+                float(
+                    episode_event_sums.get(
+                        "episode_torso_contact_rate", event_zero
+                    ).cpu()
+                )
+                / completed_events
+            )
+            metrics["eval/episode_foot_slip_speed"] = (
+                float(
+                    episode_event_sums.get(
+                        "episode_foot_slip_speed", event_zero
+                    ).cpu()
+                )
                 / completed_events
             )
         write_scalars(writer, metrics, step * wrapped_env.num_envs)
