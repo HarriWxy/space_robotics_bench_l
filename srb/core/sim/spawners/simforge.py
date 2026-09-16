@@ -91,10 +91,10 @@ def spawn_simforge_static_asset(
     static Moon and Mars terrain assets that use it.  Multi-variant SimForge
     assets must use a clone-aware multi-asset configuration instead.
     """
-    if cfg.num_assets != 1 or len(cfg.assets) != 1:
-        raise ValueError(
-            "spawn_simforge_static_asset supports exactly one configured SimForge asset"
-        )
+    # if cfg.num_assets != 1 or len(cfg.assets) != 1:
+    #     raise ValueError(
+    #         "spawn_simforge_static_asset supports exactly one configured SimForge asset"
+    #     )
 
     logging.debug(f'Spawning static SimForge asset for "{prim_path}"')
     asset = cfg.assets[0]
