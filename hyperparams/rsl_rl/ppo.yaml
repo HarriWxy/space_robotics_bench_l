@@ -2,7 +2,7 @@
 class_name: OnPolicyRunner
 # seed: 42
 device: null
-num_steps_per_env: 24
+num_steps_per_env: 32
 init_at_random_ep_len: true
 max_iterations: 100000
 empirical_normalization: false

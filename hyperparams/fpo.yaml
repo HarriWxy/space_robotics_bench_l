@@ -1,7 +1,7 @@
 # seed: 42
 # 6104 * 64 * 256 = 100,007,936 environment transitions.
-num_steps_per_env: 64
-max_iterations: 6104
+num_steps_per_env: 32
+max_iterations: 12104 
 empirical_normalization: true
 randomize_reset_episode_progress: 0.0
 clip_actions: null # 1.0
@@ -65,8 +65,8 @@ policy:
 
 algorithm:
   class_name: FPO
-  num_learning_epochs: 16
-  num_mini_batches: 64
+  num_learning_epochs: 4
+  num_mini_batches: 4
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
   adam_betas: [0.9, 0.999]
