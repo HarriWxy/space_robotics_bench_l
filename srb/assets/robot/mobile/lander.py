@@ -1,3 +1,5 @@
+from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
+
 from srb.core.action import ActionGroup, ThrustActionCfg, ThrustActionGroup, ThrusterCfg
 from srb.core.asset import Frame, Lander, RigidObjectCfg, Transform
 from srb.core.sim import (
@@ -5,7 +7,6 @@ from srb.core.sim import (
     MassPropertiesCfg,
     MeshCollisionPropertiesCfg,
     MultiAssetSpawnerCfg,
-    RigidBodyPropertiesCfg,
     UsdFileCfg,
 )
 from srb.utils.math import deg_to_rad, rpy_to_quat
@@ -25,9 +26,7 @@ class ApolloLander(Lander):
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
-            rigid_props=RigidBodyPropertiesCfg(
-                max_depenetration_velocity=5.0,
-            ),
+            rigid_props=[PhysxRigidBodyCfg(max_depenetration_velocity=5.0)],
             mass_props=MassPropertiesCfg(mass=4280.0),  # Dry mass
         ),
     )
@@ -168,9 +167,7 @@ class PeregrineLander(Lander):
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
-            rigid_props=RigidBodyPropertiesCfg(
-                max_depenetration_velocity=5.0,
-            ),
+            rigid_props=[PhysxRigidBodyCfg(max_depenetration_velocity=5.0)],
             mass_props=MassPropertiesCfg(mass=825.0),
         ),
     )
@@ -306,9 +303,7 @@ class VikramLander(Lander):
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
-            rigid_props=RigidBodyPropertiesCfg(
-                max_depenetration_velocity=5.0,
-            ),
+            rigid_props=[PhysxRigidBodyCfg(max_depenetration_velocity=5.0)],
             mass_props=MassPropertiesCfg(mass=626.0),
         ),
     )
@@ -424,9 +419,7 @@ class ResilienceLander(Lander):
             mesh_collision_props=MeshCollisionPropertiesCfg(
                 mesh_approximation="convexDecomposition"
             ),
-            rigid_props=RigidBodyPropertiesCfg(
-                max_depenetration_velocity=5.0,
-            ),
+            rigid_props=[PhysxRigidBodyCfg(max_depenetration_velocity=5.0)],
             mass_props=MassPropertiesCfg(mass=340.0),
         ),
     )

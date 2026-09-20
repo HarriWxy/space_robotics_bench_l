@@ -1,0 +1,73 @@
+# PMF-FPO configuration for train_isaacbase_pmffpo.py.
+#
+# The first three values intentionally make a one-iteration smoke run cheap.
+# Use --num-envs/--max-iterations (or --total-env-steps) for a full run.
+num_steps_per_env: 32
+max_iterations: 1
+empirical_normalization: false
+randomize_reset_episode_progress: 0.0
+clip_actions: null
+save_interval: 1
+experiment_name: h1_pmffpo
+run_name: debug
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+eval_episodes: 2
+flow_eval_modes: [zero, random]
+flow_eval_fixed_seed: null
+enable_post_training_eval: false
+post_eval_checkpoint_interval: 1
+resume: false
+load_run: ".*"
+load_checkpoint: "model_.*.pt"
+
+policy:
+  class_name: PMFActorCritic
+  init_noise_std: 1.0
+  actor_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [768, 768, 768]
+  activation: elu
+  actor_scale: 1.0
+  actor_mlp_output_scale: 1.0
+  actor_final_layer_weight_scale: null
+  # PMF is trained and evaluated as a direct one-step x prediction by default.
+  sampling_steps: 1
+  training_sampling_steps: 1
+  pmf_logit_normal_mean: -0.4
+  pmf_logit_normal_std: 1.0
+  pmf_fm_proportion: 0.5
+  pmf_aux_v_loss_coef: 1.0
+  pmf_time_eps: 0.05
+  pmf_adaptive_gradient_norm_p: 0.0
+  pmf_adaptive_gradient_norm_eps: 0.01
+
+algorithm:
+  class_name: PMFFPO
+  num_learning_epochs: 1
+  num_mini_batches: 1
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  adam_betas: [0.9, 0.999]
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  knn_entropy_coef: 0.0
+  knn_entropy_k: 1
+  desired_kl: 1.0e-4
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: false
+  clip_param: 0.05
+  trust_region_mode: aspo
+  normalize_advantage: true
+  normalize_advantage_per_mini_batch: false
+  advantage_clamp: [100.0, 100.0]
+  n_samples_per_action: 2
+  cfm_diff_clamp_max: 10.0
+  cfm_loss_clamp: 20.0
+  cfm_loss_clamp_negative_advantages: true
+  cfm_loss_clamp_negative_advantages_max: 20.0
+  storage_action_noise_std: 0.0
+  ema_decay: 0.95
+  ema_warmup_steps: 0
