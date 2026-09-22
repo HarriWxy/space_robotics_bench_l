@@ -1,0 +1,93 @@
+# Joint-latent FSPPO configuration for train_isaacbase_fsppo_joint.py.
+#
+# The wrapper injects two environments and two iterations for a small smoke
+# job.  Override --num-envs and --total-env-steps for a real experiment.
+num_steps_per_env: 32
+max_iterations: 2
+empirical_normalization: false
+randomize_reset_episode_progress: 0.0
+clip_actions: null
+# The wrapper's two-iteration smoke run still writes its first/final state;
+# avoid thousands of checkpoint files when the same YAML is used for training.
+save_interval: 2500
+experiment_name: h1_fsppo_joint
+run_name: debug
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+eval_episodes: 2
+flow_eval_modes: [zero, random]
+flow_eval_fixed_seed: null
+enable_post_training_eval: false
+post_eval_checkpoint_interval: 1
+resume: false
+load_run: ".*"
+load_checkpoint: "model_.*.pt"
+
+policy:
+  # One-NFE is required: the pMF x-mean head is the deployed transport map.
+  class_name: PMFActorCritic
+  init_noise_std: 1.0
+  actor_hidden_dims: [256, 256, 256]
+  critic_hidden_dims: [768, 768, 768]
+  activation: elu
+  actor_scale: 1.0
+  actor_mlp_output_scale: 1.0
+  actor_final_layer_weight_scale: null
+  sampling_steps: 1
+  training_sampling_steps: 1
+  # This fixed public-action Gaussian makes the joint latent likelihood exact.
+  action_perturb_std: 0.02
+  pmf_logit_normal_mean: -0.4
+  pmf_logit_normal_std: 1.0
+  pmf_fm_proportion: 0.5
+  # The default joint ratio needs only the h=1 map.  Retain the v-head target
+  # so enabling fsppo_joint_aux_loss_coef later trains both pMF heads.
+  pmf_aux_v_loss_coef: 1.0
+  pmf_time_eps: 0.05
+  pmf_adaptive_gradient_norm_p: 0.0
+  pmf_adaptive_gradient_norm_eps: 0.01
+
+algorithm:
+  class_name: FSPPOJoint
+  num_learning_epochs: 2
+  num_mini_batches: 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  adam_betas: [0.9, 0.999]
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  knn_entropy_coef: 0.0
+  knn_entropy_k: 1
+  desired_kl: 1.0e-4
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: false
+  clip_param: 0.05
+  # This is a genuine Gaussian ratio, so use standard PPO clipping.
+  trust_region_mode: ppo
+  normalize_advantage: true
+  normalize_advantage_per_mini_batch: false
+  advantage_clamp: [100.0, 100.0]
+  n_samples_per_action: 2
+  cfm_diff_clamp_max: 10.0
+  cfm_loss_clamp: 20.0
+  cfm_loss_clamp_negative_advantages: true
+  cfm_loss_clamp_negative_advantages_max: 20.0
+  # A second, unrecorded storage perturbation would break the fixed-sigma
+  # joint conditional-Gaussian contract.
+  storage_action_noise_std: 0.0
+  fsppo_joint_kl_target: 0.01
+  fsppo_joint_kl_coef: 1.0
+  fsppo_joint_dual_lr: 0.1
+  fsppo_joint_kl_coef_max: 1000.0
+  fsppo_joint_map_samples: 16
+  fsppo_joint_probe_size: 1024
+  fsppo_joint_max_backtracks: 5
+  fsppo_joint_backtrack_factor: 0.5
+  fsppo_joint_aux_loss_coef: 0.0
+  # Resume saves online weights separately if EMA is enabled; keep the first
+  # joint baseline unambiguous and evaluate the same online map.
+  ema_decay: 0.0
+  ema_warmup_steps: 0
