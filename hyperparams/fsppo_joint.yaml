@@ -28,16 +28,17 @@ policy:
   # One-NFE is required: the pMF x-mean head is the deployed transport map.
   class_name: PMFActorCritic
   init_noise_std: 1.0
-  actor_hidden_dims: [256, 256, 256]
-  critic_hidden_dims: [768, 768, 768]
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
   activation: elu
   actor_scale: 1.0
   actor_mlp_output_scale: 1.0
   actor_final_layer_weight_scale: null
   sampling_steps: 1
   training_sampling_steps: 1
-  # This fixed public-action Gaussian makes the joint latent likelihood exact.
-  action_perturb_std: 0.02
+  # This public-action Gaussian makes the joint latent likelihood exact. The
+  # algorithm can linearly anneal its std at rollout boundaries.
+  action_perturb_std: 0.1
   pmf_logit_normal_mean: -0.4
   pmf_logit_normal_std: 1.0
   pmf_fm_proportion: 0.5
@@ -50,7 +51,7 @@ policy:
 
 algorithm:
   class_name: FSPPOJoint
-  num_learning_epochs: 2
+  num_learning_epochs: 8
   num_mini_batches: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -64,13 +65,13 @@ algorithm:
   max_grad_norm: 1.0
   value_loss_coef: 1.0
   use_clipped_value_loss: false
-  clip_param: 0.05
+  clip_param: 0.2
   # This is a genuine Gaussian ratio, so use standard PPO clipping.
   trust_region_mode: ppo
   normalize_advantage: true
   normalize_advantage_per_mini_batch: false
   advantage_clamp: [100.0, 100.0]
-  n_samples_per_action: 2
+  n_samples_per_action: 16
   cfm_diff_clamp_max: 10.0
   cfm_loss_clamp: 20.0
   cfm_loss_clamp_negative_advantages: true
@@ -79,14 +80,20 @@ algorithm:
   # joint conditional-Gaussian contract.
   storage_action_noise_std: 0.0
   fsppo_joint_kl_target: 0.01
+  # Temporary no-budget ablation: no backtracking/rejection and no map-KL
+  # penalty or dual update. Set true to restore the budgeted algorithm.
+  fsppo_joint_enable_budget: false
   fsppo_joint_kl_coef: 1.0
   fsppo_joint_dual_lr: 0.1
   fsppo_joint_kl_coef_max: 1000.0
-  fsppo_joint_map_samples: 16
+  fsppo_joint_map_samples: 1
   fsppo_joint_probe_size: 1024
   fsppo_joint_max_backtracks: 5
   fsppo_joint_backtrack_factor: 0.5
-  fsppo_joint_aux_loss_coef: 0.0
+  fsppo_joint_aux_loss_coef: 1
+  # Anneal the action-noise std from 0.05 to 0.01 over 80M global transitions.
+  action_perturb_std_final: 0.05
+  action_perturb_std_decay_env_steps: 80000000
   # Resume saves online weights separately if EMA is enabled; keep the first
   # joint baseline unambiguous and evaluate the same online map.
   ema_decay: 0.0
