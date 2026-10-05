@@ -1,0 +1,639 @@
+--- isaaclab_fpo/algorithms/__init__.py
++++ isaaclab_fpo/algorithms/__init__.py
+@@ -6,6 +6,7 @@
+ """Implementation of different RL agents."""
+ 
+ from .fpo import FPO, FSPPO, IMFFPO, PMFFPO
++from .fsppo_codebook import FSPPOCodebook
+ from .fsppo_joint import FSPPOJoint
+ from .fsppo_joint_endpoint import FSPPOJointEndpoint
+ 
+@@ -16,4 +17,5 @@
+     "PMFFPO",
+     "FSPPOJoint",
+     "FSPPOJointEndpoint",
++    "FSPPOCodebook",
+ ]
+--- /dev/null
++++ isaaclab_fpo/algorithms/codebook_diagnostics.py
+@@ -0,0 +1,83 @@
++"""Posterior and clipping diagnostics for uniform Gaussian codebook policies."""
++
++from __future__ import annotations
++
++import math
++
++import torch
++
++
++@torch.no_grad()
++def codebook_diagnostics(
++    old_log_probs: torch.Tensor,
++    new_log_probs: torch.Tensor,
++    advantages: torch.Tensor,
++    clip_param: float,
++) -> dict[str, torch.Tensor]:
++    """Compare marginal clipping with posterior-averaged joint clipping.
++
++    The inputs contain component action log densities evaluated at the same
++    actions, sampled from the old uniform mixture. Component labels must refer
++    to the same fixed codebook in both policies. The component log densities
++    already sum over action dimensions.
++
++    Posterior KL and the clipping Jensen gap are non-negative for each action
++    in exact arithmetic. Small floating-point negatives are retained. The
++    marginal log-ratio KL estimate can be negative on a finite batch; the k3
++    estimate is non-negative in exact arithmetic. Both estimate old-to-new
++    marginal KL in expectation over old-policy actions.
++
++    Args:
++        old_log_probs: Finite old component log densities, shape [batch, components].
++        new_log_probs: Finite new component log densities, with the same shape,
++            dtype, and device as ``old_log_probs``.
++        advantages: Advantages used by the policy loss, shape [batch, 1].
++        clip_param: PPO clipping parameter in (0, 1).
++
++    Returns:
++        Scalar diagnostic tensors, detached from the policy gradient graph.
++
++    Raises:
++        ValueError: Tensor shapes are incompatible or the clipping parameter is invalid.
++    """
++    if (
++        old_log_probs.ndim != 2
++        or old_log_probs.shape != new_log_probs.shape
++        or old_log_probs.shape[0] == 0
++        or old_log_probs.shape[1] == 0
++    ):
++        raise ValueError("Component log densities must have matching non-empty [batch, components] shapes")
++    if advantages.shape != (old_log_probs.shape[0], 1):
++        raise ValueError("Advantages must have shape [batch, 1]")
++    if not math.isfinite(clip_param) or not 0.0 < clip_param < 1.0:
++        raise ValueError("clip_param must be finite and in (0, 1)")
++
++    old_log_total = torch.logsumexp(old_log_probs, dim=-1, keepdim=True)
++    new_log_total = torch.logsumexp(new_log_probs, dim=-1, keepdim=True)
++    old_log_posterior = torch.log_softmax(old_log_probs, dim=-1)
++    new_log_posterior = torch.log_softmax(new_log_probs, dim=-1)
++    old_posterior = old_log_posterior.exp()
++    marginal_log_ratio = new_log_total - old_log_total
++    marginal_ratio = marginal_log_ratio.exp()
++
++    # w_old * r_joint = w_new * r_marginal. This avoids overflowing component
++    # ratios in old tails and cancellation of large absolute log densities.
++    weighted_joint_ratios = new_log_posterior.exp() * marginal_ratio
++    joint_positive = torch.minimum(weighted_joint_ratios, (1.0 + clip_param) * old_posterior).sum(dim=-1, keepdim=True)
++    joint_negative = torch.maximum(weighted_joint_ratios, (1.0 - clip_param) * old_posterior).sum(dim=-1, keepdim=True)
++    joint_clipped = advantages * torch.where(advantages >= 0.0, joint_positive, joint_negative)
++    marginal_clipped = advantages * torch.where(
++        advantages >= 0.0,
++        marginal_ratio.clamp(max=1.0 + clip_param),
++        marginal_ratio.clamp(min=1.0 - clip_param),
++    )
++
++    return {
++        "codebook/posterior_entropy": -(old_posterior * old_log_posterior).sum(dim=-1).mean(),
++        "codebook/posterior_max_probability": old_posterior.max(dim=-1).values.mean(),
++        "codebook/effective_components": old_posterior.square().sum(dim=-1).reciprocal().mean(),
++        "codebook/posterior_kl": (old_posterior * (old_log_posterior - new_log_posterior)).sum(dim=-1).mean(),
++        "codebook/clip_jensen_gap": (marginal_clipped - joint_clipped).mean(),
++        "codebook/marginal_kl_k3": (torch.expm1(marginal_log_ratio) - marginal_log_ratio).mean(),
++        "codebook/marginal_kl_mc": -marginal_log_ratio.mean(),
++    }
+--- /dev/null
++++ isaaclab_fpo/algorithms/fsppo_codebook.py
+@@ -0,0 +1,217 @@
++"""Controlled joint/marginal PPO comparison on one finite mixture policy."""
++
++from __future__ import annotations
++
++import math
++from typing import TYPE_CHECKING
++
++import torch
++
++from isaaclab_fpo.modules import CodebookPMFActorCritic
++from isaaclab_fpo.storage.codebook_rollout_storage import CodebookRolloutStorage
++
++from .codebook_diagnostics import codebook_diagnostics
++from .fsppo_joint import FSPPOJoint
++
++if TYPE_CHECKING:
++    from isaaclab_fpo.rl_cfg import FpoRslRlPpoAlgorithmCfg
++
++
++class FSPPOCodebook(FSPPOJoint):
++    """Change only the PPO ratio between a fixed-codebook joint and marginal.
++
++    Both modes use the same uniform discrete prior and conditional Gaussian
++    sampler. Full old component log densities are computed once before any
++    optimizer step; the generating component's conditional density retains
++    its existing, separate storage field. Budget, auxiliary regression and
++    EMA are disabled to isolate the ratio in this experiment.
++    """
++
++    def __init__(
++        self,
++        policy: CodebookPMFActorCritic,
++        cfg: FpoRslRlPpoAlgorithmCfg,
++        device: str = "cpu",
++        multi_gpu_cfg: dict | None = None,
++    ):
++        if not isinstance(policy, CodebookPMFActorCritic):
++            raise TypeError("FSPPOCodebook requires CodebookPMFActorCritic")
++        if cfg.fsppo_codebook_ratio_mode not in ("joint", "marginal"):
++            raise ValueError("fsppo_codebook_ratio_mode must be joint or marginal")
++        if (
++            cfg.fsppo_joint_enable_budget
++            or cfg.fsppo_joint_aux_loss_coef != 0
++            or cfg.ema_decay != 0
++            or cfg.fsppo_joint_entropy_coef != 0
++        ):
++            raise ValueError("The codebook ratio comparison requires budget=False, aux=0, entropy=0 and ema_decay=0")
++        self.ratio_mode = cfg.fsppo_codebook_ratio_mode
++        super().__init__(policy, cfg, device=device, multi_gpu_cfg=multi_gpu_cfg)
++        self.transition = CodebookRolloutStorage.Transition()
++
++    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape):
++        """Allocate selected-component fields and an O(K) behavior-density cache."""
++        self.storage = CodebookRolloutStorage(
++            num_envs,
++            num_transitions_per_env,
++            actor_obs_shape,
++            critic_obs_shape,
++            actions_shape,
++            codebook_size=self.policy.codebook_size,
++            device=self.device,
++        )
++
++    def begin_rollout(self, completed_env_steps: int) -> None:
++        """Advance sigma only after the previous rollout has been consumed."""
++        if self.storage is not None and self.storage.step != 0:
++            raise RuntimeError("Cannot change sigma while a rollout is pending")
++        self.policy.validate_codebook()
++        super().begin_rollout(completed_env_steps)
++        self.policy.codebook_noise_std.fill_(self.sigma)
++
++    @torch.no_grad()
++    def act(self, obs: torch.Tensor, critic_obs: torch.Tensor) -> torch.Tensor:
++        """Retain raw actions and the actual selected discrete component."""
++        self._check_sampler_contract()
++        actions, index, latent, mean, log_prob = self.policy.sample_codebook_transport(obs)
++        self.transition.actions = actions.clone()
++        self.transition.component_index = index
++        self.transition.action_latent = latent
++        self.transition.action_mean = mean
++        self.transition.action_log_prob = log_prob
++        self.transition.action_std = self._action_std().expand_as(mean).clone()
++        self.transition.values = self.policy.evaluate(critic_obs)
++        self.transition.observations = obs.clone()
++        self.transition.privileged_observations = critic_obs.clone()
++        return actions
++
++    def update(self, obs_normalizer=None, privileged_obs_normalizer=None) -> dict:
++        """Freeze all behavior densities once, then run the shared PPO update."""
++        self._check_sampler_contract()
++        self.policy.validate_codebook()
++        if self.storage.step != self.storage.num_transitions_per_env:
++            raise RuntimeError("FSPPOCodebook.update requires a complete rollout")
++        self._validate_replay()
++        with torch.no_grad():
++            observations = self.storage.observations.flatten(0, 1)
++            actions = self.storage.actions.flatten(0, 1)
++            cached = self.storage.old_component_log_probs.flatten(0, 1)
++            for start in range(0, observations.shape[0], self.probe_size):
++                part = slice(start, start + self.probe_size)
++                means = self.policy.component_means(observations[part])
++                cached[part].copy_(self.policy.component_action_log_probs(actions[part], means))
++            selected = cached.gather(1, self.storage.component_indices.flatten().unsqueeze(-1))
++            if not torch.isfinite(cached).all() or not torch.allclose(
++                selected, self.storage.action_log_probs.flatten(0, 1), rtol=1e-4, atol=1e-4
++            ):
++                raise RuntimeError("Cached codebook densities do not match the behavior sampler")
++            self.storage.component_log_probs_ready = True
++        result = super().update(obs_normalizer, privileged_obs_normalizer)
++        # This variant does not compute the legacy continuous-prior L1 map cost.
++        result["metrics"].pop("joint/map_kl_train", None)
++        result["metrics"].pop("joint/legacy_map_l1_train", None)
++        result["metrics"].pop("joint/ratio_mean", None)
++        return result
++
++    def _batch_loss(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
++        advantages = batch["advantages"]
++        if self.normalize_advantage_per_mini_batch:
++            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
++        positive, negative = self.advantage_clamp
++        advantages = advantages.clamp(-negative, positive)
++        means = self.policy.component_means(batch["obs"])
++        current = self.policy.component_action_log_probs(batch["actions"], means)
++        old = batch["old_component_log_probs"]
++        selected = batch["component_indices"].unsqueeze(-1)
++        joint_log_ratio = current.gather(1, selected) - batch["action_log_probs"]
++        marginal_log_ratio = torch.logsumexp(current, dim=-1, keepdim=True) - torch.logsumexp(old, dim=-1, keepdim=True)
++        log_ratio = joint_log_ratio if self.ratio_mode == "joint" else marginal_log_ratio
++        ratio = log_ratio.exp()
++        surrogate = -torch.minimum(
++            ratio * advantages, ratio.clamp(1 - self.clip_param, 1 + self.clip_param) * advantages
++        ).mean()
++        value = self.policy.evaluate(batch["critic_obs"])
++        value_error = (value - batch["returns"]).square()
++        if self.use_clipped_value_loss:
++            clipped = batch["values"] + (value - batch["values"]).clamp(-self.clip_param, self.clip_param)
++            value_error = torch.maximum(value_error, (clipped - batch["returns"]).square())
++        value_loss = value_error.mean()
++        loss = surrogate + self.value_loss_coef * value_loss
++        diagnostics = codebook_diagnostics(old, current.detach(), advantages.detach(), self.clip_param)
++        diagnostics.update(
++            {
++                "codebook/joint_kl_k3": (torch.expm1(joint_log_ratio.detach()) - joint_log_ratio.detach()).mean(),
++                "codebook/joint_clip_fraction": ((joint_log_ratio.detach().exp() - 1).abs() > self.clip_param)
++                .float()
++                .mean(),
++                "codebook/marginal_clip_fraction": ((marginal_log_ratio.detach().exp() - 1).abs() > self.clip_param)
++                .float()
++                .mean(),
++                "codebook/joint_ratio_mean": joint_log_ratio.detach().exp().mean(),
++                "codebook/marginal_ratio_mean": marginal_log_ratio.detach().exp().mean(),
++                "codebook/selected_ratio_mean": ratio.detach().mean(),
++            }
++        )
++        statistics = {
++            "surrogate_loss": surrogate,
++            "value_loss": value_loss,
++            "total_loss": loss,
++            "sample_joint_kl": (torch.expm1(log_ratio.detach()) - log_ratio.detach()).mean(),
++            "clip_fraction": ((ratio.detach() - 1).abs() > self.clip_param).float().mean(),
++            "ratio_mean": ratio.detach().mean(),
++            **diagnostics,
++        }
++        return loss, statistics
++
++    def _extra_update_metrics(self, means: dict[str, torch.Tensor]) -> dict:
++        metrics = {name: value for name, value in means.items() if name.startswith("codebook/")}
++        metrics["codebook/size"] = self.policy.codebook_size
++        metrics["codebook/marginal_ratio_enabled"] = float(self.ratio_mode == "marginal")
++        # Enumerate the finite prior exactly on a small, deterministic state
++        # probe. This is joint KL averaged over probe states, not a hard bound.
++        with torch.no_grad():
++            obs = self.storage.observations.flatten(0, 1)[: self.probe_size]
++            old_means = self.policy.component_means(obs, actor=self._old_actor)
++            current_means = self.policy.component_means(obs)
++            metrics["codebook/joint_kl_analytic_probe"] = (
++                (current_means - old_means).square().sum(dim=-1) / (2 * self.sigma**2)
++            ).mean()
++        return metrics
++
++    def _current_sampler_contract(self) -> dict:
++        contract = super()._current_sampler_contract()
++        contract.update(
++            {
++                "latent_prior": "uniform_codebook",
++                "codebook_size": self.policy.codebook_size,
++                "codebook_seed": self.policy.codebook_seed,
++                "codebook_sha256": self.policy.codebook_sha256,
++                "ratio_mode": self.ratio_mode,
++            }
++        )
++        return contract
++
++    def state_dict(self) -> dict:
++        """Persist the annealed scale as well as the immutable sampling contract."""
++        state = super().state_dict()
++        state["action_noise_completed_env_steps"] = self.action_noise_completed_env_steps
++        state["action_noise_std"] = self.sigma
++        return state
++
++    def load_state_dict(self, state: dict) -> None:
++        """Restore a matching objective and the checkpoint's rollout noise."""
++        steps = state.get("action_noise_completed_env_steps")
++        sigma = state.get("action_noise_std")
++        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 0:
++            raise ValueError("Invalid codebook checkpoint noise-schedule step")
++        if isinstance(sigma, bool) or not isinstance(sigma, (int, float)) or not math.isfinite(sigma):
++            raise ValueError("Invalid codebook checkpoint noise standard deviation")
++        progress = min(steps / self.sigma_decay_env_steps, 1.0) if self.sigma_decay_env_steps else 0.0
++        expected = self.initial_sigma + progress * (self.final_sigma - self.initial_sigma)
++        if sigma != expected or float(self.policy.codebook_noise_std) != sigma:
++            raise ValueError("Codebook checkpoint noise scale does not match its schedule and policy")
++        super().load_state_dict(state)
++        self.sigma = float(sigma)
++        self.policy.action_perturb_std = self.sigma
++        self.action_noise_completed_env_steps = steps
++        self.action_noise_schedule_progress = progress
+--- isaaclab_fpo/algorithms/fsppo_joint.py
++++ isaaclab_fpo/algorithms/fsppo_joint.py
+@@ -439,6 +439,7 @@
+         for name in ("aux_u_loss", "aux_v_loss", "aux_jvp_norm"):
+             if name in means:
+                 metrics[f"joint/{name}"] = means[name]
++        metrics.update(self._extra_update_metrics(means))
+         self.storage.clear()
+         self.update_counter += 1
+         self.tot_timesteps += 1
+@@ -453,6 +454,10 @@
+         self._metrics_to_cpu(loss_dict, metrics)
+         loss_dict["metrics"] = metrics
+         return loss_dict
++
++    def _extra_update_metrics(self, means: dict[str, torch.Tensor]) -> dict:
++        """Return variant-specific diagnostics before conversion to CPU scalars."""
++        return {}
+ 
+     def _current_sampler_contract(self) -> dict:
+         contract = {
+--- isaaclab_fpo/modules/__init__.py
++++ isaaclab_fpo/modules/__init__.py
+@@ -6,6 +6,7 @@
+ """Definitions for neural-network components for RL-agents."""
+ 
+ from .actor_critic import ActorCritic, IMFActorCritic, PMFActorCritic
++from .codebook_actor_critic import CodebookPMFActorCritic
+ from .gaussian_residual_actor_critic import GaussianResidualPMFActorCritic
+ from .normalizer import EmpiricalNormalization
+ 
+@@ -13,6 +14,7 @@
+     "ActorCritic",
+     "IMFActorCritic",
+     "PMFActorCritic",
++    "CodebookPMFActorCritic",
+     "GaussianResidualPMFActorCritic",
+     "EmpiricalNormalization",
+ ]
+--- /dev/null
++++ isaaclab_fpo/modules/codebook_actor_critic.py
+@@ -0,0 +1,125 @@
++"""One-step pMF policy with a fixed, uniform finite latent prior."""
++
++from __future__ import annotations
++
++import hashlib
++import math
++from typing import TYPE_CHECKING
++
++import torch
++
++from .actor_critic import PMFActorCritic
++
++if TYPE_CHECKING:
++    from isaaclab_fpo.rl_cfg import FpoRslRlPpoActorCriticCfg
++
++
++class CodebookPMFActorCritic(PMFActorCritic):
++    """Sample a finite Gaussian mixture and evaluate its exact action density.
++
++    Each component is the existing one-NFE transport evaluated at one fixed
++    code vector. Codebook initialization uses an independent CPU generator,
++    so it does not consume the actor/environment random stream.
++    """
++
++    def __init__(
++        self,
++        num_actor_obs: int,
++        num_critic_obs: int,
++        num_actions: int,
++        cfg: FpoRslRlPpoActorCriticCfg,
++    ):
++        size, seed = cfg.codebook_size, cfg.codebook_seed
++        if isinstance(size, bool) or not isinstance(size, int) or size < 1:
++            raise ValueError("codebook_size must be a positive integer")
++        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**63:
++            raise ValueError("codebook_seed must be an integer in [0, 2**63)")
++        super().__init__(num_actor_obs, num_critic_obs, num_actions, cfg)
++        self.codebook_size = size
++        self.codebook_seed = seed
++        generator = torch.Generator(device="cpu").manual_seed(seed)
++        codebook = torch.randn(size, num_actions, generator=generator)
++        self.codebook_sha256 = hashlib.sha256(codebook.numpy().tobytes()).hexdigest()
++        self.register_buffer("latent_codebook", codebook)
++        self.register_buffer("_expected_codebook", codebook.clone(), persistent=False)
++        # The legacy scalar is not in the base policy state_dict. Persist it
++        # here so evaluation uses the checkpoint's actual annealed noise.
++        self.register_buffer("codebook_noise_std", torch.tensor(self.action_perturb_std, dtype=torch.float64))
++
++    def validate_codebook(self) -> None:
++        """Reject mutation of the prior used to collect and replay actions."""
++        if not torch.equal(self.latent_codebook, self._expected_codebook):
++            raise ValueError("The fixed latent codebook has changed")
++
++    def component_means(self, observations: torch.Tensor, actor: torch.nn.Module | None = None) -> torch.Tensor:
++        """Return all public-action component means, with shape [batch, K, D]."""
++        codes = self.latent_codebook.unsqueeze(0).expand(observations.shape[0], -1, -1)
++        return self.transport_actions(observations, codes, actor=actor)
++
++    def component_action_log_probs(self, actions: torch.Tensor, means: torch.Tensor) -> torch.Tensor:
++        """Return D-dimensional conditional densities with shape [batch, K]."""
++        if means.ndim != 3 or means.shape[1:] != (self.codebook_size, self.num_actions):
++            raise ValueError("means must have shape [batch, codebook_size, num_actions]")
++        if actions.shape != (means.shape[0], self.num_actions):
++            raise ValueError("actions must have shape [batch, num_actions]")
++        expanded_actions = actions.unsqueeze(1).expand_as(means)
++        return self.conditional_action_log_prob(expanded_actions, means).squeeze(-1)
++
++    def marginal_action_log_prob(self, actions: torch.Tensor, means: torch.Tensor) -> torch.Tensor:
++        """Return the exact uniform mixture log density, with shape [batch, 1]."""
++        components = self.component_action_log_probs(actions, means)
++        return torch.logsumexp(components, dim=-1, keepdim=True) - math.log(self.codebook_size)
++
++    def sample_codebook_transport(
++        self, observations: torch.Tensor, generator: torch.Generator | None = None
++    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
++        """Sample actions, component indices, codes, means, and conditional log densities."""
++        indices = torch.randint(
++            self.codebook_size, (observations.shape[0],), device=observations.device, generator=generator
++        )
++        latent = self.latent_codebook[indices]
++        mean = self.transport_actions(observations, latent)
++        noise = torch.randn(mean.shape, device=mean.device, dtype=mean.dtype, generator=generator)
++        actions = mean + self._conditional_action_std() * noise
++        return actions, indices, latent, mean, self.conditional_action_log_prob(actions, mean)
++
++    def sample_transport(self, observations: torch.Tensor):
++        """Use the finite prior in the base policy's transport-sampling interface."""
++        actions, _, latent, mean, log_prob = self.sample_codebook_transport(observations)
++        return actions, latent, mean, log_prob
++
++    def act(self, observations: torch.Tensor, **kwargs) -> torch.Tensor:
++        """Sample from the finite prior in the public stochastic-action interface."""
++        return self.sample_codebook_transport(observations)[0]
++
++    def act_inference(
++        self, observations: torch.Tensor, eval_mode: str = "random", eval_fixed_seed: int | None = 12345
++    ) -> torch.Tensor:
++        """Evaluate the actual mixture, or its explicitly deterministic mean.
++
++        ``random`` includes both discrete latent and conditional Gaussian
++        noise. ``fixed_seed`` reinitializes a local generator per call.
++        ``mean`` (and the compatibility alias ``zero``) averages all component
++        means without noise; it is a deterministic reference, not a sample.
++        """
++        if eval_mode in ("mean", "zero"):
++            return self.component_means(observations).mean(dim=1)
++        if eval_mode == "random":
++            return self.sample_codebook_transport(observations)[0]
++        if eval_mode == "fixed_seed":
++            seed = 12345 if eval_fixed_seed is None else eval_fixed_seed
++            generator = torch.Generator(device=observations.device).manual_seed(seed)
++            return self.sample_codebook_transport(observations, generator=generator)[0]
++        raise ValueError(f"Unknown codebook evaluation mode: {eval_mode!r}")
++
++    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
++        """Validate and restore the saved codebook and conditional noise scale."""
++        codebook = state_dict.get("latent_codebook")
++        if codebook is None or not torch.equal(codebook.detach().cpu(), self._expected_codebook.detach().cpu()):
++            raise ValueError("Codebook checkpoint latent prior mismatch")
++        noise = state_dict.get("codebook_noise_std")
++        if noise is None or noise.ndim != 0 or not math.isfinite(float(noise)) or float(noise) <= 0:
++            raise ValueError("Codebook checkpoint has an invalid noise standard deviation")
++        result = super().load_state_dict(state_dict, strict=strict, assign=assign)
++        self.action_perturb_std = float(self.codebook_noise_std)
++        return result
+--- isaaclab_fpo/rl_cfg.py
++++ isaaclab_fpo/rl_cfg.py
+@@ -20,7 +20,11 @@
+     """Configuration for the PPO actor-critic networks."""
+ 
+     class_name: str = "ActorCritic"
+-    """Policy class, including ``GaussianResidualPMFActorCritic`` for joint PPO."""
++    """Policy class, including residual-Gaussian and fixed-codebook joint PPO variants.
++
++    ``GaussianResidualPMFActorCritic`` uses a Gaussian backbone;
++    ``CodebookPMFActorCritic`` uses a fixed finite latent prior.
++    """
+ 
+     init_noise_std: float = 1.0
+     """The initial noise standard deviation for the policy."""
+@@ -103,6 +107,12 @@
+     Perturbs actions with random noise, which can be interpreted as an entropy
+     regularizer."""
+ 
++    codebook_size: int = 8
++    """Number of fixed latent codes for ``CodebookPMFActorCritic``."""
++
++    codebook_seed: int = 12345
++    """Seed used to generate the fixed latent codebook independently of the training RNG."""
++
+     learn_action_perturb_std: bool = False
+     """Learn a bounded public-action std per coordinate in the residual Gaussian policy.
+ 
+@@ -204,7 +214,14 @@
+     """Algorithm class name for the selected policy optimization variant.
+ 
+     Supported names include ``FPO``, ``IMFFPO``, ``PMFFPO``, ``FSPPO``,
+-    ``FSPPOJoint``, and ``FSPPOJointEndpoint``.
++    ``FSPPOJoint``, ``FSPPOJointEndpoint``, and ``FSPPOCodebook``.
++    """
++
++    fsppo_codebook_ratio_mode: Literal["joint", "marginal"] = "marginal"
++    """Likelihood ratio used by ``FSPPOCodebook``.
++
++    ``joint`` conditions on the sampled code; ``marginal`` evaluates the exact
++    action likelihood by summing over the fixed codebook.
+     """
+ 
+     num_learning_epochs: int = 16
+@@ -605,6 +622,7 @@
+ 
+     Available modes:
+     - "zero": Use zeros for initial noise
++    - "mean": Use the deterministic mixture mean (``CodebookPMFActorCritic`` only)
+     - "fixed_seed": Use fixed random seed for reproducible noise
+     - "random": Use random noise (different each time)
+     """
+--- isaaclab_fpo/runners/on_policy_runner.py
++++ isaaclab_fpo/runners/on_policy_runner.py
+@@ -18,6 +18,7 @@
+ from isaaclab_fpo.algorithms import (
+     FPO,
+     FSPPO,
++    FSPPOCodebook,
+     FSPPOJoint,
+     FSPPOJointEndpoint,
+     IMFFPO,
+@@ -29,6 +30,7 @@
+ from isaaclab_fpo.env import VecEnv
+ from isaaclab_fpo.modules import (
+     ActorCritic,
++    CodebookPMFActorCritic,
+     EmpiricalNormalization,
+     GaussianResidualPMFActorCritic,
+     IMFActorCritic,
+@@ -75,11 +77,13 @@
+             "ActorCritic": ActorCritic,
+             "IMFActorCritic": IMFActorCritic,
+             "PMFActorCritic": PMFActorCritic,
++            "CodebookPMFActorCritic": CodebookPMFActorCritic,
+             "GaussianResidualPMFActorCritic": GaussianResidualPMFActorCritic,
+         }
+         algorithm_classes = {
+             "FPO": FPO,
+             "FSPPO": FSPPO,
++            "FSPPOCodebook": FSPPOCodebook,
+             "FSPPOJoint": FSPPOJoint,
+             "FSPPOJointEndpoint": FSPPOJointEndpoint,
+             "IMFFPO": IMFFPO,
+@@ -105,6 +109,7 @@
+             ActorCritic: (FPO,),
+             IMFActorCritic: (IMFFPO,),
+             PMFActorCritic: (PMFFPO, FSPPO, FSPPOJoint, FSPPOJointEndpoint),
++            CodebookPMFActorCritic: (FSPPOCodebook,),
+             GaussianResidualPMFActorCritic: (FSPPOJoint,),
+         }
+         if algorithm_class not in allowed_algorithms[policy_class]:
+--- /dev/null
++++ isaaclab_fpo/storage/codebook_rollout_storage.py
+@@ -0,0 +1,45 @@
++"""Finite-latent rollout storage with cached frozen behavior densities."""
++
++from __future__ import annotations
++
++import torch
++
++from .joint_rollout_storage import JointRolloutStorage
++
++
++class CodebookRolloutStorage(JointRolloutStorage):
++    """Keep selected conditional densities separate from full mixture densities."""
++
++    class Transition(JointRolloutStorage.Transition):
++        def __init__(self):
++            super().__init__()
++            self.component_index = None
++
++    def __init__(self, *args, codebook_size: int, **kwargs):
++        super().__init__(*args, **kwargs)
++        shape = (self.num_transitions_per_env, self.num_envs)
++        self.component_indices = torch.zeros(shape, dtype=torch.long, device=self.device)
++        self.old_component_log_probs = torch.zeros(*shape, codebook_size, device=self.device)
++        self.component_log_probs_ready = False
++
++    def add_transitions(self, transition: Transition) -> None:
++        if transition.component_index is None:
++            raise ValueError("Codebook transition is missing its component index")
++        step = self.step
++        super().add_transitions(transition)
++        self.component_indices[step].copy_(transition.component_index)
++
++    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int = 8):
++        if not self.component_log_probs_ready:
++            raise RuntimeError("Behavior component densities must be cached before updating")
++        indices = self.component_indices.flatten(0, 1)
++        log_probs = self.old_component_log_probs.flatten(0, 1)
++        for batch in super().mini_batch_generator(num_mini_batches, num_epochs):
++            selection = batch["transition_indices"]
++            batch["component_indices"] = indices[selection]
++            batch["old_component_log_probs"] = log_probs[selection]
++            yield batch
++
++    def clear(self) -> None:
++        super().clear()
++        self.component_log_probs_ready = False
+--- isaaclab_fpo/storage/joint_rollout_storage.py
++++ isaaclab_fpo/storage/joint_rollout_storage.py
+@@ -211,6 +211,7 @@
+                 start = stop
+ 
+                 yield {
++                    "transition_indices": batch_indices,
+                     "obs": observations[batch_indices],
+                     "critic_obs": critic_observations[batch_indices],
+                     "actions": actions[batch_indices],

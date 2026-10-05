@@ -1,0 +1,1405 @@
+--- /dev/null
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/modules/gaussian_residual_actor_critic.py
+@@ -0,0 +1,254 @@
++# Copyright (c) 2021-2025, ETH Zurich and NVIDIA CORPORATION
++# All rights reserved.
++#
++# SPDX-License-Identifier: BSD-3-Clause
++
++"""Gaussian control backbone with a zero-initialized pMF action residual."""
++
++from __future__ import annotations
++
++import math
++from typing import TYPE_CHECKING
++
++import torch
++from torch import nn
++
++from isaaclab_fpo.utils import resolve_nn_activation
++
++from .actor_critic import PMFActorCritic
++
++if TYPE_CHECKING:
++    from isaaclab_fpo.rl_cfg import FpoRslRlPpoActorCriticCfg
++
++
++class GaussianResidualPMFActorCritic(PMFActorCritic):
++    """Start from a Gaussian actor and learn an additive latent-dependent flow.
++
++    A zero residual gives ``a = mean(s) + std * epsilon`` exactly. Both pMF
++    endpoint heads contain that same state-only mean; the inherited pMF
++    transport and auxiliary losses therefore share one coordinate convention.
++    The bounded per-action standard deviation lives inside ``actor`` so an
++    old-actor deepcopy retains the complete conditional Gaussian distribution.
++
++    Only the one-step transport contract is supported. The evaluation action
++    uses the inherited latent sampling mode and omits conditional action noise.
++    """
++
++    def __init__(
++        self,
++        num_actor_obs: int,
++        num_critic_obs: int,
++        num_actions: int,
++        cfg: FpoRslRlPpoActorCriticCfg,
++    ) -> None:
++        for name in ("actor_scale", "actor_mlp_output_scale"):
++            value = getattr(cfg, name)
++            if (
++                not isinstance(value, (int, float))
++                or not math.isfinite(value)
++                or value <= 0.0
++            ):
++                raise ValueError(f"{name} must be a finite, positive scalar")
++        residual_scale = cfg.gaussian_residual_scale
++        if (
++            not isinstance(residual_scale, (int, float))
++            or not math.isfinite(residual_scale)
++            or residual_scale < 0.0
++        ):
++            raise ValueError("gaussian_residual_scale must be finite and non-negative")
++        public_output_scale = cfg.actor_scale * cfg.actor_mlp_output_scale
++        if not math.isfinite(public_output_scale) or public_output_scale <= 0.0:
++            raise ValueError(
++                "actor_scale * actor_mlp_output_scale must be finite and positive"
++            )
++        training_steps = cfg.training_sampling_steps
++        if cfg.sampling_steps != 1 or training_steps not in (None, 1):
++            raise ValueError(
++                "GaussianResidualPMFActorCritic requires one sampling step"
++            )
++        if cfg.pmf_time_eps > 1.0:
++            raise ValueError("pmf_time_eps must be at most 1 for one-step transport")
++
++        std_min = float(cfg.action_perturb_std_min)
++        std_max = float(cfg.action_perturb_std_max)
++        initial_std = float(cfg.action_perturb_std)
++        if (
++            not math.isfinite(std_min)
++            or not math.isfinite(std_max)
++            or not 0.0 < std_min < std_max
++        ):
++            raise ValueError(
++                "action noise bounds must satisfy 0 < min < max < infinity"
++            )
++        if not math.isfinite(initial_std) or initial_std <= 0.0:
++            raise ValueError("action_perturb_std must be finite and positive")
++        if not isinstance(cfg.learn_action_perturb_std, bool):
++            raise ValueError("learn_action_perturb_std must be a bool")
++        self.learn_action_perturb_std = cfg.learn_action_perturb_std
++        self.action_perturb_std_min = std_min
++        self.action_perturb_std_max = std_max
++        self.gaussian_residual_scale = float(residual_scale)
++        if self.learn_action_perturb_std and not std_min < initial_std < std_max:
++            raise ValueError(
++                "Learned action_perturb_std must start strictly inside its bounds"
++            )
++
++        super().__init__(num_actor_obs, num_critic_obs, num_actions, cfg)
++        residual = self.actor
++        final_layer = residual[-1]
++        if not isinstance(final_layer, nn.Linear):
++            raise TypeError("The pMF residual must end with a linear layer")
++        nn.init.zeros_(final_layer.weight)
++        if final_layer.bias is not None:
++            nn.init.zeros_(final_layer.bias)
++
++        mean_layers: list[nn.Module] = []
++        input_dim = num_actor_obs
++        for hidden_dim in cfg.actor_hidden_dims:
++            mean_layers.extend(
++                (
++                    nn.Linear(input_dim, hidden_dim),
++                    resolve_nn_activation(cfg.activation),
++                )
++            )
++            input_dim = hidden_dim
++        mean_layers.append(nn.Linear(input_dim, num_actions))
++        mean = nn.Sequential(*mean_layers)
++        if cfg.actor_final_layer_weight_scale is not None:
++            with torch.no_grad():
++                mean[-1].weight.mul_(cfg.actor_final_layer_weight_scale)
++                mean[-1].bias.mul_(cfg.actor_final_layer_weight_scale)
++
++        self.actor = _GaussianResidualActor(
++            mean=mean,
++            residual=residual,
++            num_actor_obs=num_actor_obs,
++            num_actions=num_actions,
++            public_output_scale=public_output_scale,
++            residual_scale=float(cfg.gaussian_residual_scale),
++            initial_std=initial_std,
++            std_min=std_min,
++            std_max=std_max,
++            learn_std=self.learn_action_perturb_std,
++        )
++
++    def conditional_action_std(self, actor: nn.Module | None = None) -> torch.Tensor:
++        """Return the conditional Gaussian scale in public action coordinates.
++
++        With fixed noise, the current actor follows ``action_perturb_std`` so
++        the existing rollout sigma schedule remains usable. An explicitly
++        supplied frozen actor retains its saved rollout scale.
++
++        Args:
++            actor: Optional frozen actor snapshot, including its noise scale.
++
++        Returns:
++            Standard deviations with shape ``[action_dim]``.
++        """
++        if actor is None:
++            actor = self.actor
++            if not self.learn_action_perturb_std:
++                action_std = float(self.action_perturb_std)
++                if not math.isfinite(action_std) or action_std <= 0.0:
++                    raise ValueError("action_perturb_std must be finite and positive")
++                actor.fixed_action_std.fill_(action_std)
++        if not isinstance(actor, _GaussianResidualActor):
++            raise TypeError("actor must be a Gaussian residual actor snapshot")
++        return actor.conditional_std()
++
++    def _conditional_action_std(self) -> torch.Tensor:
++        """Provide the per-action scale to the inherited rollout sampler."""
++        return self.conditional_action_std()
++
++    def conditional_action_log_prob(
++        self,
++        actions: torch.Tensor,
++        means: torch.Tensor,
++        std: torch.Tensor | None = None,
++    ) -> torch.Tensor:
++        """Evaluate a complete diagonal Gaussian density, including log scale.
++
++        Args:
++            actions: Public actions with shape ``[..., action_dim]``.
++            means: Conditional means with the same shape and units as actions.
++            std: Optional saved standard deviations broadcastable to actions.
++                By default, use the current actor's scale.
++
++        Returns:
++            Log densities summed over action dimensions, shape ``[..., 1]``.
++        """
++        if actions.shape != means.shape:
++            raise ValueError("actions and means must have identical shapes")
++        if actions.ndim < 1 or actions.shape[-1] != self.num_actions:
++            raise ValueError(f"actions must end with action_dim={self.num_actions}")
++        if std is None:
++            std = self.conditional_action_std()
++        else:
++            if not torch.isfinite(std).all() or not (std > 0.0).all():
++                raise ValueError("std must contain finite, positive values")
++        std = std.to(device=actions.device, dtype=actions.dtype)
++        try:
++            std = torch.broadcast_to(std, actions.shape)
++        except RuntimeError as error:
++            raise ValueError("std must be broadcastable to the action shape") from error
++        standardized_residual = (actions - means) / std
++        return -0.5 * (
++            standardized_residual.square() + 2.0 * std.log() + math.log(2.0 * math.pi)
++        ).sum(dim=-1, keepdim=True)
++
++    def act(self, observations: torch.Tensor, **kwargs) -> torch.Tensor:
++        """Use the same conditional Gaussian for training rollouts and replay."""
++        if self.training:
++            return self.sample_transport(observations)[0]
++        return super().act(observations, **kwargs)
++
++
++class _GaussianResidualActor(nn.Module):
++    """Own every conditional-policy parameter for frozen actor snapshots."""
++
++    def __init__(
++        self,
++        mean: nn.Module,
++        residual: nn.Module,
++        num_actor_obs: int,
++        num_actions: int,
++        public_output_scale: float,
++        residual_scale: float,
++        initial_std: float,
++        std_min: float,
++        std_max: float,
++        learn_std: bool,
++    ) -> None:
++        super().__init__()
++        self.mean = mean
++        self.residual = residual
++        self.num_actor_obs = num_actor_obs
++        self.public_output_scale = public_output_scale
++        self.residual_scale = residual_scale
++        self.learn_std = learn_std
++        self.register_buffer(
++            "fixed_action_std", torch.full((num_actions,), initial_std)
++        )
++        self.register_buffer("action_std_min", torch.tensor(std_min))
++        self.register_buffer("action_std_range", torch.tensor(std_max - std_min))
++        if learn_std:
++            fraction = (initial_std - std_min) / (std_max - std_min)
++            logit = math.log(fraction) - math.log1p(-fraction)
++            self.action_std_logit = nn.Parameter(torch.full((num_actions,), logit))
++        else:
++            self.register_parameter("action_std_logit", None)
++
++    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
++        # The backbone predicts public actions, while PMFActorCritic expects
++        # endpoints before its actor_scale * mlp_output_scale multiplication.
++        mean = self.mean(inputs[..., : self.num_actor_obs]) / self.public_output_scale
++        mean_heads = torch.cat((mean, mean), dim=-1)
++        return mean_heads + self.residual_scale * self.residual(inputs)
++
++    def conditional_std(self) -> torch.Tensor:
++        """Return a positive per-action standard deviation in public units."""
++        if self.learn_std:
++            return self.action_std_min + self.action_std_range * torch.sigmoid(
++                self.action_std_logit
++            )
++        return self.fixed_action_std
+--- a/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/modules/__init__.py
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/modules/__init__.py
+@@ -6,11 +6,13 @@
+ """Definitions for neural-network components for RL-agents."""
+ 
+ from .actor_critic import ActorCritic, IMFActorCritic, PMFActorCritic
++from .gaussian_residual_actor_critic import GaussianResidualPMFActorCritic
+ from .normalizer import EmpiricalNormalization
+ 
+ __all__ = [
+     "ActorCritic",
+     "IMFActorCritic",
+     "PMFActorCritic",
++    "GaussianResidualPMFActorCritic",
+     "EmpiricalNormalization",
+ ]
+--- a/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/rl_cfg.py
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/rl_cfg.py
+@@ -20,7 +20,7 @@
+     """Configuration for the PPO actor-critic networks."""
+ 
+     class_name: str = "ActorCritic"
+-    """The policy class name (``ActorCritic``, ``IMFActorCritic`` or ``PMFActorCritic``)."""
++    """Policy class, including ``GaussianResidualPMFActorCritic`` for joint PPO."""
+ 
+     init_noise_std: float = 1.0
+     """The initial noise standard deviation for the policy."""
+@@ -103,6 +103,25 @@
+     Perturbs actions with random noise, which can be interpreted as an entropy
+     regularizer."""
+ 
++    learn_action_perturb_std: bool = False
++    """Learn a bounded public-action std per coordinate in the residual Gaussian policy.
++
++    Only ``GaussianResidualPMFActorCritic`` consumes this field. When enabled,
++    the joint algorithm must not also apply the rollout noise-annealing schedule.
++    """
++
++    action_perturb_std_min: float = 0.05
++    """Lower bound of the residual policy's learned conditional Gaussian std."""
++
++    action_perturb_std_max: float = 2.0
++    """Upper bound of the residual policy's learned conditional Gaussian std."""
++
++    gaussian_residual_scale: float = 1.0
++    """Constant scale of the zero-initialized pMF residual beside the Gaussian mean.
++
++    Zero disables the residual and gives a Gaussian-only architecture ablation.
++    """
++
+     # Improved Mean Flow (iMF) parameters.  They are ignored by the default
+     # ``ActorCritic``/``FPO`` pair and activated only by
+     # ``IMFActorCritic``/``IMFFPO``.
+@@ -416,6 +435,37 @@
+     The default leaves the exact joint-Gaussian PPO objective unmodified.
+     """
+ 
++    fsppo_joint_aux_weighting: Literal["uniform", "advantage_exp"] = "uniform"
++    """Use uniform or capped, detached exponential-advantage pMF weights.
++
++    Exponential weights are computed once over the entire rollout and reused
++    across PPO epochs. They approximate reward-weighted transport distillation,
++    rather than an exact state-normalized Gibbs policy projection.
++    """
++
++    fsppo_joint_aux_temperature: float = 1.0
++    """Positive temperature for normalized-advantage exponential weights."""
++
++    fsppo_joint_aux_weight_clip: float = 20.0
++    """Upper cap applied after the rollout weights are mean-normalized.
++
++    The cap can reduce their final mean below one. It must be at least one.
++    """
++
++    fsppo_joint_aux_target: Literal["actions", "means"] = "actions"
++    """Fit noisy raw actions or saved noise-free behavior transport means.
++
++    ``means`` avoids distilling the final conditional Gaussian into the map and
++    injecting it again at rollout. It is an approximate reward-aware transport
++    target; it is not the exact Gibbs target over executed actions.
++    """
++
++    fsppo_joint_entropy_coef: float = 0.0
++    """Optional conditional Gaussian entropy bonus for joint PPO.
++
++    This is H(action | observation, latent), not marginal action entropy.
++    """
++
+     fsppo_joint_adv_v_loss_coef: float = 0.0
+     """Weight for positive-advantage pMF instantaneous-velocity regression.
+ 
+--- a/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/runners/on_policy_runner.py
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/runners/on_policy_runner.py
+@@ -30,6 +30,7 @@
+ from isaaclab_fpo.modules import (
+     ActorCritic,
+     EmpiricalNormalization,
++    GaussianResidualPMFActorCritic,
+     IMFActorCritic,
+     PMFActorCritic,
+ )
+@@ -74,6 +75,7 @@
+             "ActorCritic": ActorCritic,
+             "IMFActorCritic": IMFActorCritic,
+             "PMFActorCritic": PMFActorCritic,
++            "GaussianResidualPMFActorCritic": GaussianResidualPMFActorCritic,
+         }
+         algorithm_classes = {
+             "FPO": FPO,
+@@ -103,6 +105,7 @@
+             ActorCritic: (FPO,),
+             IMFActorCritic: (IMFFPO,),
+             PMFActorCritic: (PMFFPO, FSPPO, FSPPOJoint, FSPPOJointEndpoint),
++            GaussianResidualPMFActorCritic: (FSPPOJoint,),
+         }
+         if algorithm_class not in allowed_algorithms[policy_class]:
+             allowed_names = sorted(
+--- a/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/algorithms/fsppo_joint.py
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/algorithms/fsppo_joint.py
+@@ -1,4 +1,4 @@
+-"""One-step latent Gaussian PPO with an empirical transport-map KL budget."""
++"""One-step latent Gaussian PPO with optional conditional-policy budgets."""
+ 
+ from __future__ import annotations
+ 
+@@ -9,7 +9,7 @@
+ import torch
+ 
+ from isaaclab_fpo.algorithms.fpo import FPO
+-from isaaclab_fpo.modules import PMFActorCritic
++from isaaclab_fpo.modules import GaussianResidualPMFActorCritic, PMFActorCritic
+ from isaaclab_fpo.storage.joint_rollout_storage import JointRolloutStorage
+ 
+ if TYPE_CHECKING:
+@@ -22,9 +22,11 @@
+     Rollouts retain the actual generating latent and raw, perturbed action.
+     The Gaussian conditional log-ratio is therefore exact for the joint policy;
+     it is not the marginal action log-ratio. With sigma held positive and
+-    fixed for each rollout and its update, the same-latent map cost divided by
+-    ``2 * sigma**2`` is the joint KL and an
+-    upper bound on marginal action KL, in expectation over the prior.
++    fixed for each rollout and its update, the squared same-latent map cost
++    divided by ``2 * sigma**2`` is the joint KL. The Gaussian-residual policy
++    instead permits a learned diagonal scale and uses its full Gaussian KL.
++    Both KLs bound marginal action KL in expectation over the prior. The
++    legacy PMF policy retains its historical L1 map budget for compatibility.
+ 
+     When the budget is enabled, every candidate optimizer step is checked on
+     one fixed probe set for this rollout.  A rejected candidate restores BOTH
+@@ -44,7 +46,7 @@
+         multi_gpu_cfg: dict | None = None,
+     ):
+         if not isinstance(policy, PMFActorCritic):
+-            raise TypeError("FSPPOJoint requires policy.class_name='PMFActorCritic'")
++            raise TypeError("FSPPOJoint requires a PMFActorCritic policy")
+         if multi_gpu_cfg is not None:
+             raise ValueError(
+                 "FSPPOJoint currently supports a single learner device only"
+@@ -69,6 +71,19 @@
+                 "FSPPOJoint requires schedule='fixed' and trust_region_mode='ppo'"
+             )
+         decay_env_steps = cfg.action_perturb_std_decay_env_steps
++        self.gaussian_residual_policy = isinstance(
++            policy, GaussianResidualPMFActorCritic
++        )
++        self.learn_action_std = (
++            self.gaussian_residual_policy and policy.learn_action_perturb_std
++        )
++        if self.learn_action_std and (
++            decay_env_steps != 0 or cfg.action_perturb_std_final is not None
++        ):
++            raise ValueError(
++                "Learned action noise requires action_perturb_std_decay_env_steps=0 "
++                "and action_perturb_std_final=None"
++            )
+         if (
+             isinstance(decay_env_steps, bool)
+             or not isinstance(decay_env_steps, int)
+@@ -105,6 +120,7 @@
+             "fsppo_joint_dual_lr",
+             "fsppo_joint_kl_coef_max",
+             "fsppo_joint_aux_loss_coef",
++            "fsppo_joint_entropy_coef",
+         ):
+             value = getattr(cfg, name)
+             if not math.isfinite(value) or value < 0:
+@@ -131,6 +147,24 @@
+             )
+         if not 0 < cfg.fsppo_joint_backtrack_factor < 1:
+             raise ValueError("fsppo_joint_backtrack_factor must be in (0, 1)")
++        if cfg.fsppo_joint_aux_weighting not in ("uniform", "advantage_exp"):
++            raise ValueError(
++                "fsppo_joint_aux_weighting must be 'uniform' or 'advantage_exp'"
++            )
++        if cfg.fsppo_joint_aux_target not in ("actions", "means"):
++            raise ValueError("fsppo_joint_aux_target must be 'actions' or 'means'")
++        if (
++            not math.isfinite(cfg.fsppo_joint_aux_temperature)
++            or cfg.fsppo_joint_aux_temperature <= 0
++        ):
++            raise ValueError("fsppo_joint_aux_temperature must be finite and positive")
++        if (
++            not math.isfinite(cfg.fsppo_joint_aux_weight_clip)
++            or cfg.fsppo_joint_aux_weight_clip < 1
++        ):
++            raise ValueError(
++                "fsppo_joint_aux_weight_clip must be finite and at least 1"
++            )
+ 
+         # The shared launcher enables TF32 ("high"). Different rollout and
+         # minibatch GEMM shapes then change the same actor's means enough to
+@@ -147,9 +181,7 @@
+         self.action_noise_completed_env_steps = 0
+         self.enable_budget = bool(cfg.fsppo_joint_enable_budget)
+         self.kl_target = cfg.fsppo_joint_kl_target
+-        self.kl_coefficient = (
+-            cfg.fsppo_joint_kl_coef if self.enable_budget else 0.0
+-        )
++        self.kl_coefficient = cfg.fsppo_joint_kl_coef if self.enable_budget else 0.0
+         self.dual_lr = cfg.fsppo_joint_dual_lr
+         self.kl_coefficient_max = cfg.fsppo_joint_kl_coef_max
+         self.map_samples = cfg.fsppo_joint_map_samples
+@@ -157,14 +189,20 @@
+         self.max_backtracks = cfg.fsppo_joint_max_backtracks
+         self.backtrack_factor = cfg.fsppo_joint_backtrack_factor
+         self.aux_loss_coef = cfg.fsppo_joint_aux_loss_coef
++        self.aux_weighting = cfg.fsppo_joint_aux_weighting
++        self.aux_temperature = cfg.fsppo_joint_aux_temperature
++        self.aux_weight_clip = cfg.fsppo_joint_aux_weight_clip
++        self.aux_target = cfg.fsppo_joint_aux_target
++        self.entropy_coef = cfg.fsppo_joint_entropy_coef
+         self._sampler_contract = self._current_sampler_contract()
+         self._old_actor = copy.deepcopy(self.policy.actor).requires_grad_(False).eval()
+ 
+     def begin_rollout(self, completed_env_steps: int) -> None:
+-        """Set the fixed conditional Gaussian scale for the next rollout.
++        """Set the scheduled scale or retain the learned scale for a rollout.
+ 
+         The schedule advances only at a rollout boundary. Each collected batch
+-        and its subsequent PPO update therefore use the same Gaussian scale.
++        and its subsequent PPO update use that same fixed Gaussian scale.
++        A learned Gaussian scale instead changes through the PPO update.
+         """
+         if (
+             isinstance(completed_env_steps, bool)
+@@ -174,6 +212,11 @@
+             raise ValueError("completed_env_steps must be a non-negative integer")
+         self._check_sampler_contract()
+         self.action_noise_completed_env_steps = completed_env_steps
++        if self.learn_action_std:
++            # The scale is part of the actor and follows PPO gradients, not an
++            # external schedule. Sampling and replay use the same saved actor.
++            self.action_noise_schedule_progress = 0.0
++            return
+         if self.sigma_decay_env_steps > 0:
+             progress = min(completed_env_steps / self.sigma_decay_env_steps, 1.0)
+         else:
+@@ -213,6 +256,7 @@
+         self.transition.action_latent = latent
+         self.transition.action_mean = mean
+         self.transition.action_log_prob = log_prob
++        self.transition.action_std = self._action_std().expand_as(mean).clone()
+         self.transition.values = self.policy.evaluate(critic_obs)
+         # The runner may reuse observation buffers before process_env_step.
+         self.transition.observations = obs.clone()
+@@ -265,6 +309,7 @@
+         # Prove that replay still refers to the behavior actor, not an EMA or
+         # a policy changed between collection and update.
+         self._validate_replay()
++        aux_weight_metrics = self._prepare_aux_weights()
+         totals: dict[str, torch.Tensor] = {}
+         accepted = rejected = attempted = 0
+         last_step_lr = 0.0
+@@ -302,10 +347,10 @@
+ 
+         with torch.no_grad():
+             if self.enable_budget:
+-                probe_kl = self._probe_l1(probe)
++                probe_kl = self._probe_distance(probe)
+                 # New states/noises are drawn AFTER all updates; these diagnostics
+                 # are not reused for acceptance or described as a hard guarantee.
+-                audit_kl = self._probe_l1(self._make_probe())
++                audit_kl = self._probe_distance(self._make_probe())
+                 if not torch.isfinite(audit_kl).all():
+                     raise FloatingPointError(
+                         "Non-finite FSPPOJoint fresh rollout map audit"
+@@ -331,6 +376,7 @@
+                 variance.new_zeros(()),
+             )
+             action_std = self.storage.actions.std(dim=(0, 1), unbiased=False).mean()
++            noise_std = self._action_std().detach()
+         means = {key: value / max(accepted, 1) for key, value in totals.items()}
+         metrics = {
+             "clip_param": self.clip_param,
+@@ -340,8 +386,12 @@
+             "clip_fraction": means.get("clip_fraction", 0.0),
+             "explained_variance": explained,
+             "action_std": action_std,
+-            "joint/action_noise_std": self.sigma,
+-            "joint/action_noise_variance": self.sigma**2,
++            "joint/action_noise_std": noise_std.mean(),
++            "joint/action_noise_std_min": noise_std.min(),
++            "joint/action_noise_std_max": noise_std.max(),
++            "joint/action_noise_variance": noise_std.square().mean(),
++            "joint/learn_action_noise_std": float(self.learn_action_std),
++            "joint/conditional_entropy": self._conditional_entropy().detach(),
+             "joint/action_noise_schedule_progress": self.action_noise_schedule_progress,
+             "joint/action_noise_completed_env_steps": (
+                 self.action_noise_completed_env_steps
+@@ -359,18 +409,33 @@
+             "joint/last_step_learning_rate": last_step_lr,
+             "joint/ratio_mean": means.get("ratio_mean", 1.0),
+             "joint/map_kl_train": means.get("map_kl", 0.0),
++            "joint/budget_uses_gaussian_kl": float(self.gaussian_residual_policy),
++            **aux_weight_metrics,
+             "mean_grad_norm_before_clip": means.get("mean_grad_norm_before_clip", 0.0),
+             "mean_grad_norm_after_clip": means.get("mean_grad_norm_after_clip", 0.0),
+         }
+         if self.enable_budget:
+             for name, samples in (("probe", probe_kl), ("audit", audit_kl)):
+                 mean = samples.mean()
+-                metrics[f"joint/{name}_kl_mean"] = mean
+-                metrics[f"joint/{name}_kl_p95"] = torch.quantile(samples.flatten(), 0.95)
+-                metrics[f"joint/{name}_kl_max"] = samples.max()
+-                metrics[f"joint/{name}_map_distance"] = (
+-                    mean * 2 * self.sigma**2
++                # Preserve legacy names, and expose the actual metric used.
++                kind = (
++                    "conditional_joint_kl"
++                    if self.gaussian_residual_policy
++                    else "legacy_map_l1"
+                 )
++                for label, value in (
++                    ("mean", mean),
++                    ("p95", torch.quantile(samples.flatten(), 0.95)),
++                    ("max", samples.max()),
++                ):
++                    metrics[f"joint/{name}_kl_{label}"] = value
++                    metrics[f"joint/{name}_{kind}_{label}"] = value
++                if not self.gaussian_residual_policy:
++                    metrics[f"joint/{name}_map_distance"] = mean
++        if self.gaussian_residual_policy:
++            metrics["joint/conditional_joint_kl_train"] = means.get("map_kl", 0.0)
++        else:
++            metrics["joint/legacy_map_l1_train"] = means.get("map_kl", 0.0)
+         for name in ("aux_u_loss", "aux_v_loss", "aux_jvp_norm"):
+             if name in means:
+                 metrics[f"joint/{name}"] = means[name]
+@@ -382,6 +447,7 @@
+             "value_loss": means.get("value_loss", 0.0),
+             "map_kl_loss": means.get("map_kl_loss", 0.0),
+             "pmf_aux_loss": means.get("pmf_aux_loss", 0.0),
++            "conditional_entropy_loss": means.get("conditional_entropy_loss", 0.0),
+             "total_loss": means.get("total_loss", 0.0),
+         }
+         self._metrics_to_cpu(loss_dict, metrics)
+@@ -402,8 +468,17 @@
+         }
+         if self.sigma_decay_env_steps > 0:
+             contract["action_perturb_std_final"] = self.final_sigma
+-            contract["action_perturb_std_decay_env_steps"] = (
+-                self.sigma_decay_env_steps
++            contract["action_perturb_std_decay_env_steps"] = self.sigma_decay_env_steps
++        if self.gaussian_residual_policy:
++            contract.update(
++                policy_class=type(self.policy).__name__,
++                learn_action_perturb_std=self.learn_action_std,
++                action_perturb_std_min=float(self.policy.action_perturb_std_min),
++                action_perturb_std_max=float(self.policy.action_perturb_std_max),
++                gaussian_residual_scale=float(self.policy.gaussian_residual_scale),
++                actor_residual_scale=float(self.policy.actor.residual_scale),
++                actor_public_output_scale=float(self.policy.actor.public_output_scale),
++                budget_metric="conditional_gaussian_kl",
+             )
+         return contract
+ 
+@@ -412,10 +487,65 @@
+             raise ValueError(
+                 "FSPPOJoint sampler dimensions and noise schedule must remain fixed"
+             )
+-        if float(self.policy.action_perturb_std) != self.sigma:
++        if (
++            not self.learn_action_std
++            and float(self.policy.action_perturb_std) != self.sigma
++        ):
+             raise ValueError(
+                 "FSPPOJoint action noise may only change at a rollout boundary"
+             )
++
++    def _action_std(self, actor: torch.nn.Module | None = None) -> torch.Tensor:
++        """Read the current or frozen conditional scale in action coordinates."""
++        if self.gaussian_residual_policy:
++            return self.policy.conditional_action_std(actor=actor)
++        return next(self.policy.parameters()).new_full(
++            (self.policy.num_actions,), self.sigma
++        )
++
++    def _conditional_entropy(self) -> torch.Tensor:
++        """Gaussian conditional entropy; this excludes latent-action mutual information."""
++        return (self._action_std().log() + 0.5 * math.log(2 * math.pi * math.e)).sum()
++
++    @torch.no_grad()
++    def _prepare_aux_weights(self) -> dict[str, torch.Tensor]:
++        """Freeze capped positive distillation weights for the entire PPO update.
++
++        Standardization and normalization use the complete rollout. These
++        weights are reused unchanged by all epochs and mini-batches. Capping
++        after mean normalization can reduce their final mean below one.
++        """
++        weights = self.storage.aux_weights
++        weights.fill_(1.0)
++        if self.aux_loss_coef > 0 and self.aux_weighting == "advantage_exp":
++            advantages = self.storage.advantages.detach()
++            standardized = (advantages - advantages.mean()) / (
++                advantages.std(unbiased=False) + 1e-8
++            )
++            log_weights = standardized / self.aux_temperature
++            if not torch.isfinite(log_weights).all():
++                raise FloatingPointError("Non-finite FSPPOJoint auxiliary log weights")
++            log_weights = (log_weights - log_weights.max()).clamp_min(
++                math.log(torch.finfo(log_weights.dtype).tiny)
++            )
++            positive_weights = log_weights.exp()
++            positive_weights = positive_weights / positive_weights.mean()
++            weights.copy_(positive_weights.clamp_max(self.aux_weight_clip))
++        flat = weights.flatten()
++        # Fraction of an equivalent uniformly weighted rollout, in (0, 1].
++        ess_fraction = flat.sum().square() / (flat.square().sum() * flat.numel())
++        return {
++            "joint/aux_weight_mean": flat.mean(),
++            "joint/aux_weight_min": flat.min(),
++            "joint/aux_weight_max": flat.max(),
++            "joint/aux_weight_ess_fraction": ess_fraction,
++            "joint/aux_reward_weighting": flat.new_tensor(
++                float(self.aux_weighting == "advantage_exp")
++            ),
++            "joint/aux_target_is_mean": flat.new_tensor(
++                float(self.aux_target == "means")
++            ),
++        }
+ 
+     @torch.no_grad()
+     def _validate_replay(self) -> None:
+@@ -424,10 +554,27 @@
+         means = self.storage.action_means.flatten(0, 1)
+         actions = self.storage.actions.flatten(0, 1)
+         log_probs = self.storage.action_log_probs.flatten(0, 1)
++        action_stds = self.storage.action_stds.flatten(0, 1)
+         for start in range(0, obs.shape[0], self.probe_size):
+             part = slice(start, start + self.probe_size)
+             replay = self.policy.transport_actions(obs[part], latents[part])
+-            log_prob = self.policy.conditional_action_log_prob(actions[part], replay)
++            if self.gaussian_residual_policy:
++                if not torch.allclose(
++                    self._action_std().expand_as(action_stds[part]),
++                    action_stds[part],
++                    rtol=1e-5,
++                    atol=1e-7,
++                ):
++                    raise RuntimeError(
++                        "FSPPOJoint behavior replay mismatch: action scale changed"
++                    )
++                log_prob = self.policy.conditional_action_log_prob(
++                    actions[part], replay, std=action_stds[part]
++                )
++            else:
++                log_prob = self.policy.conditional_action_log_prob(
++                    actions[part], replay
++                )
+             if not torch.allclose(
+                 replay, means[part], rtol=1e-4, atol=1e-6
+             ) or not torch.allclose(log_prob, log_probs[part], rtol=1e-4, atol=1e-4):
+@@ -447,18 +594,57 @@
+             ]
+             obs = observations[indices]
+             noise = torch.randn(
+-                obs.shape[0], self.map_samples, self.policy.num_actions, device=self.device
+-            )
+-            old_actions = self.policy.transport_actions(obs, noise, actor=self._old_actor)
+-            return {"obs": obs, "noise": noise, "old_actions": old_actions}
++                obs.shape[0],
++                self.map_samples,
++                self.policy.num_actions,
++                device=self.device,
++            )
++            old_actions = self.policy.transport_actions(
++                obs, noise, actor=self._old_actor
++            )
++            return {
++                "obs": obs,
++                "noise": noise,
++                "old_actions": old_actions,
++                "old_std": self._action_std(actor=self._old_actor).clone(),
++            }
+         else:
+-            return {"obs": torch.empty(0), "noise": torch.empty(0), "old_actions": torch.empty(0)}
++            return {
++                "obs": torch.empty(0),
++                "noise": torch.empty(0),
++                "old_actions": torch.empty(0),
++            }
+ 
+     @torch.no_grad()
+     def _probe_l1(self, probe: dict[str, torch.Tensor]) -> torch.Tensor:
+-        """Wasserstein distance between current and old transport actions."""
+-        actions: torch.Tensor = self.policy.transport_actions(probe["obs"], probe["noise"])
+-        return ((actions - probe["old_actions"])).absolute().sum(dim=-1)
++        """Legacy L1 same-latent map cost; it is not a Gaussian KL."""
++        actions: torch.Tensor = self.policy.transport_actions(
++            probe["obs"], probe["noise"]
++        )
++        return (actions - probe["old_actions"]).absolute().sum(dim=-1)
++
++    def _gaussian_kl(
++        self,
++        current_mean: torch.Tensor,
++        old_mean: torch.Tensor,
++        old_std: torch.Tensor,
++    ) -> torch.Tensor:
++        """Compute ``KL(old || current)`` including learned scale changes."""
++        current_std = self._action_std()
++        log_variance_ratio = 2 * (old_std / current_std).log()
++        # expm1 avoids losing a small variance-only KL by subtracting 0.5
++        # from another number near 0.5 in single precision.
++        variance_kl = 0.5 * (torch.expm1(log_variance_ratio) - log_variance_ratio)
++        mean_kl = 0.5 * ((old_mean - current_mean) / current_std).square()
++        return (variance_kl + mean_kl).sum(dim=-1)
++
++    @torch.no_grad()
++    def _probe_distance(self, probe: dict[str, torch.Tensor]) -> torch.Tensor:
++        """Evaluate the selected policy's budget metric on a fixed probe."""
++        if not self.gaussian_residual_policy:
++            return self._probe_l1(probe)
++        current_mean = self.policy.transport_actions(probe["obs"], probe["noise"])
++        return self._gaussian_kl(current_mean, probe["old_actions"], probe["old_std"])
+ 
+     def _batch_loss(
+         self, batch: dict[str, torch.Tensor]
+@@ -491,28 +677,55 @@
+                 value_error, (clipped - batch["returns"]).square()
+             )
+         value_loss = value_error.mean()
+-        noise = torch.randn(
+-            obs.shape[0], self.map_samples, self.policy.num_actions, device=self.device
+-        )
+-        current_map = self.policy.transport_actions(obs, noise)
+-        with torch.no_grad():
+-            old_map = self.policy.transport_actions(obs, noise, actor=self._old_actor)
+-        map_kl = (current_map - old_map).absolute().sum(dim=-1).mean()
+-        aux_loss, aux_metrics = self._auxiliary_loss(obs, actions)
++        if self.gaussian_residual_policy and not self.enable_budget:
++            # Saved behavior latents already give an empirical joint KL. Avoid
++            # additional transport evaluations when this is diagnostic only.
++            map_kl = self._gaussian_kl(
++                mean, batch["action_means"], batch["action_stds"]
++            ).mean()
++        else:
++            noise = torch.randn(
++                obs.shape[0],
++                self.map_samples,
++                self.policy.num_actions,
++                device=self.device,
++            )
++            current_map = self.policy.transport_actions(obs, noise)
++            with torch.no_grad():
++                old_map = self.policy.transport_actions(
++                    obs, noise, actor=self._old_actor
++                )
++            if self.gaussian_residual_policy:
++                map_kl = self._gaussian_kl(
++                    current_map, old_map, self._action_std(actor=self._old_actor)
++                ).mean()
++            else:
++                map_kl = (current_map - old_map).absolute().sum(dim=-1).mean()
++        aux_target = batch["action_means"] if self.aux_target == "means" else actions
++        aux_loss, aux_metrics = self._auxiliary_loss(
++            obs, aux_target.detach(), batch.get("aux_weights")
++        )
+         penalty = (
+-            self.kl_coefficient * map_kl
+-            if self.enable_budget
+-            else map_kl.new_zeros(())
++            self.kl_coefficient * map_kl if self.enable_budget else map_kl.new_zeros(())
+         )
+         # pMF regression uses non-negative weights; signed advantages would
+         # reward increasing the residual on negative-advantage samples.
+         weighted_aux = self.aux_loss_coef * aux_loss.mean()
+-        loss = surrogate + self.value_loss_coef * value_loss + penalty + weighted_aux
++        # This is H(a | obs, latent), not the marginal mixture/action entropy.
++        entropy_loss = -self.entropy_coef * self._conditional_entropy()
++        loss = (
++            surrogate
++            + self.value_loss_coef * value_loss
++            + penalty
++            + weighted_aux
++            + entropy_loss
++        )
+         statistics = {
+             "surrogate_loss": surrogate,
+             "value_loss": value_loss,
+             "map_kl_loss": penalty,
+             "pmf_aux_loss": weighted_aux,
++            "conditional_entropy_loss": entropy_loss,
+             "total_loss": loss,
+             "sample_joint_kl": (torch.expm1(log_ratio) - log_ratio).mean(),
+             "clip_fraction": ((ratio - 1).abs() > self.clip_param).float().mean(),
+@@ -523,8 +736,17 @@
+         return loss, statistics
+ 
+     def _auxiliary_loss(
+-        self, obs: torch.Tensor, actions: torch.Tensor
++        self,
++        obs: torch.Tensor,
++        actions: torch.Tensor,
++        weights: torch.Tensor | None = None,
+     ) -> tuple[torch.Tensor, dict]:
++        """Regress pMF on frozen behavior targets with non-negative weights.
++
++        Mean targets distill the transport before conditional action noise is
++        added. Advantage weights make this reward-aware transport distillation;
++        they do not implement an exact state-wise marginal Gibbs projection.
++        """
+         if self.aux_loss_coef == 0:
+             return obs.new_zeros(()), {}
+         shape = (obs.shape[0], self.n_samples_per_action, 1)
+@@ -544,9 +766,12 @@
+         score, _, _, components = self.policy.get_pmf_loss(
+             obs, actions, eps, r, t, return_components=True
+         )
+-        return score, {
+-            "aux_u_loss": components["u_loss"].mean(),
+-            "aux_v_loss": components["v_loss"].mean(),
++        if weights is None:
++            weights = score.new_ones((obs.shape[0], 1))
++        weights = weights.detach()
++        return score * weights, {
++            "aux_u_loss": (components["u_loss"] * weights).mean(),
++            "aux_v_loss": (components["v_loss"] * weights).mean(),
+             "aux_jvp_norm": components["jvp_norm"].mean(),
+         }
+ 
+@@ -570,7 +795,7 @@
+             for group, lr in zip(self.optimizer.param_groups, base_lrs):
+                 group["lr"] = lr * factor
+             self.optimizer.step()
+-            kl = self._probe_l1(probe)
++            kl = self._probe_distance(probe)
+             finite_parameters = bool(
+                 torch.stack(
+                     [torch.isfinite(p).all() for p in self.policy.parameters()]
+--- a/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/storage/joint_rollout_storage.py
++++ b/isaaclab_experiments/isaaclab_fpo/isaaclab_fpo/storage/joint_rollout_storage.py
+@@ -31,6 +31,8 @@
+             self.action_latent = None
+             self.action_mean = None
+             self.action_log_prob = None
++            self.action_std = None
++            self.aux_weight = None
+ 
+     def __init__(
+         self,
+@@ -69,6 +71,10 @@
+         self.action_log_probs = torch.zeros(
+             num_transitions_per_env, num_envs, 1, device=self.device
+         )
++        # Optional for callers that still use a fixed scalar Gaussian scale.
++        # FSPPOJoint always saves the behavior standard deviation explicitly.
++        self.action_stds = torch.zeros_like(self.action_means)
++        self.aux_weights = torch.ones_like(self.action_log_probs)
+ 
+     def add_transitions(self, transition: Transition):
+         """Copy a complete joint-policy transition into the next rollout slot.
+@@ -125,6 +131,14 @@
+         self.action_latents[self.step].copy_(transition.action_latent)
+         self.action_means[self.step].copy_(transition.action_mean)
+         self.action_log_probs[self.step].copy_(transition.action_log_prob)
++        if transition.action_std is not None:
++            self.action_stds[self.step].copy_(transition.action_std)
++        else:
++            self.action_stds[self.step].zero_()
++        if transition.aux_weight is not None:
++            self.aux_weights[self.step].copy_(transition.aux_weight)
++        else:
++            self.aux_weights[self.step].fill_(1.0)
+ 
+         self._save_hidden_states(transition.hidden_states)
+         self.step += 1
+@@ -181,6 +195,8 @@
+         action_latents = self.action_latents.flatten(0, 1)
+         action_means = self.action_means.flatten(0, 1)
+         action_log_probs = self.action_log_probs.flatten(0, 1)
++        action_stds = self.action_stds.flatten(0, 1)
++        aux_weights = self.aux_weights.flatten(0, 1)
+ 
+         base_mini_batch_size, num_larger_batches = divmod(batch_size, num_mini_batches)
+         for _ in range(num_epochs):
+@@ -204,6 +220,8 @@
+                     "action_latents": action_latents[batch_indices],
+                     "action_means": action_means[batch_indices],
+                     "action_log_probs": action_log_probs[batch_indices],
++                    "action_stds": action_stds[batch_indices],
++                    "aux_weights": aux_weights[batch_indices],
+                 }
+ 
+     def recurrent_mini_batch_generator(self, *args, **kwargs):
+--- a/isaaclab_experiments/isaaclab_fpo/tests/test_fsppo_joint.py
++++ b/isaaclab_experiments/isaaclab_fpo/tests/test_fsppo_joint.py
+@@ -4,6 +4,7 @@
+ 
+ import argparse
+ import copy
++import math
+ from types import SimpleNamespace
+ 
+ import pytest
+@@ -13,7 +14,7 @@
+ 
+ from isaaclab_fpo.algorithms import FSPPOJoint
+ from isaaclab_fpo.cli_args import update_fpo_cfg
+-from isaaclab_fpo.modules import PMFActorCritic
++from isaaclab_fpo.modules import GaussianResidualPMFActorCritic, PMFActorCritic
+ from isaaclab_fpo.rl_cfg import (
+     FpoRslRlOnPolicyRunnerCfg,
+     FpoRslRlPpoActorCriticCfg,
+@@ -66,9 +67,10 @@
+     return FpoRslRlPpoAlgorithmCfg(**settings)
+ 
+ 
+-def make_algorithm(**overrides):
++def make_algorithm(policy_class=PMFActorCritic, policy_overrides=None, **overrides):
+     return FSPPOJoint(
+-        PMFActorCritic(3, 3, 2, make_policy_cfg()), make_algorithm_cfg(**overrides)
++        policy_class(3, 3, 2, make_policy_cfg(**(policy_overrides or {}))),
++        make_algorithm_cfg(**overrides),
+     )
+ 
+ 
+@@ -96,6 +98,120 @@
+             assert_tree_equal(a, b)
+     else:
+         assert left == right
++
++
++@pytest.mark.parametrize("learn_std", [False, True])
++def test_gaussian_residual_starts_as_latent_independent_gaussian(learn_std):
++    policy = GaussianResidualPMFActorCritic(
++        3,
++        3,
++        2,
++        make_policy_cfg(
++            learn_action_perturb_std=learn_std,
++            actor_mlp_output_scale=0.7,
++            actor_scale=0.5,
++        ),
++    )
++    observations = torch.randn(4, 3)
++    latent = torch.randn(4, 2)
++    expected_mean = policy.actor.mean(observations)
++    assert torch.allclose(policy.transport_actions(observations, latent), expected_mean)
++    assert torch.allclose(
++        policy.transport_actions(observations, -10 * latent), expected_mean
++    )
++    multiple_means = policy.transport_actions(observations, torch.randn(4, 3, 2))
++    assert torch.allclose(
++        multiple_means, expected_mean[:, None, :].expand_as(multiple_means)
++    )
++
++    actions, _, means, log_prob = policy.sample_transport(observations)
++    oracle = (
++        torch.distributions.Normal(expected_mean, 0.2)
++        .log_prob(actions)
++        .sum(-1, keepdim=True)
++    )
++    assert torch.allclose(means, expected_mean)
++    assert torch.allclose(log_prob, oracle, atol=1e-6)
++
++
++def test_learned_action_std_receives_density_gradient_and_respects_bounds():
++    policy = GaussianResidualPMFActorCritic(
++        3,
++        3,
++        2,
++        make_policy_cfg(
++            learn_action_perturb_std=True,
++            action_perturb_std_min=0.05,
++            action_perturb_std_max=0.8,
++        ),
++    )
++    before = policy.conditional_action_std().detach().clone()
++    means = policy.transport_actions(torch.zeros(3, 3), torch.zeros(3, 2))
++    optimizer = torch.optim.SGD(policy.parameters(), lr=0.1)
++    optimizer.zero_grad()
++    (-policy.conditional_action_log_prob(means.detach(), means).mean()).backward()
++    assert torch.count_nonzero(policy.actor.action_std_logit.grad) == 2
++    optimizer.step()
++    assert bool((policy.conditional_action_std() < before).all())
++
++    with torch.no_grad():
++        policy.actor.action_std_logit.copy_(torch.tensor([-100.0, 100.0]))
++    extreme_std = policy.conditional_action_std()
++    assert torch.allclose(extreme_std, torch.tensor([0.05, 0.8]))
++    assert bool(torch.isfinite(extreme_std).all())
++    assert torch.isfinite(
++        policy.conditional_action_log_prob(means.detach(), means)
++    ).all()
++
++
++def test_learned_action_std_rejects_a_hand_scheduled_noise_override():
++    with pytest.raises(ValueError, match="Learned action noise requires"):
++        make_algorithm(
++            policy_class=GaussianResidualPMFActorCritic,
++            policy_overrides={"learn_action_perturb_std": True},
++            action_perturb_std_final=0.1,
++            action_perturb_std_decay_env_steps=100,
++        )
++
++
++def test_joint_ratio_keeps_behavior_std_when_only_current_std_changes():
++    alg = make_algorithm(
++        policy_class=GaussianResidualPMFActorCritic,
++        policy_overrides={"learn_action_perturb_std": True},
++        fsppo_joint_enable_budget=False,
++    )
++    collect(alg)
++    batch = next(alg.storage.mini_batch_generator(1, 1))
++    old_std = batch["action_stds"].clone()
++    old_logp = batch["action_log_probs"].clone()
++    with torch.no_grad():
++        alg.policy.actor.action_std_logit.add_(torch.tensor([0.3, -0.2]))
++    new_mean = alg.policy.transport_actions(batch["obs"], batch["action_latents"])
++    new_std = alg.policy.conditional_action_std()
++    oracle_old = torch.distributions.Normal(batch["action_means"], old_std)
++    oracle_new = torch.distributions.Normal(new_mean, new_std)
++    expected_log_ratio = (
++        oracle_new.log_prob(batch["actions"]) - oracle_old.log_prob(batch["actions"])
++    ).sum(-1, keepdim=True)
++    actual_log_ratio = (
++        alg.policy.conditional_action_log_prob(batch["actions"], new_mean) - old_logp
++    )
++    assert torch.allclose(actual_log_ratio, expected_log_ratio, atol=1e-6)
++    assert not torch.allclose(actual_log_ratio, torch.zeros_like(actual_log_ratio))
++    assert torch.equal(batch["action_stds"], old_std)
++    assert torch.allclose(
++        alg.policy.conditional_action_log_prob(
++            batch["actions"], batch["action_means"], std=old_std
++        ),
++        old_logp,
++        atol=1e-6,
++    )
++    _, metrics = alg._batch_loss(batch)
++    assert torch.allclose(metrics["ratio_mean"], expected_log_ratio.exp().mean())
++    expected_kl = (
++        torch.distributions.kl_divergence(oracle_old, oracle_new).sum(-1).mean()
++    )
++    assert torch.allclose(metrics["map_kl"], expected_kl, atol=1e-6)
+ 
+ 
+ def test_joint_ratio_equals_gaussian_density_ratio_and_replays_actual_latent():
+@@ -184,8 +300,108 @@
+     assert torch.isfinite(torch.tensor(results["total_loss"]))
+ 
+ 
+-def test_rejected_candidate_restores_model_and_adam_state_even_after_previous_updates():
+-    alg = make_algorithm(fsppo_joint_max_backtracks=1)
++@pytest.mark.parametrize("weight_clip", [20.0, 1.25])
++def test_advantage_distillation_weights_are_global_capped_and_frozen(
++    monkeypatch, weight_clip
++):
++    alg = make_algorithm(
++        policy_class=GaussianResidualPMFActorCritic,
++        policy_overrides={"learn_action_perturb_std": True},
++        fsppo_joint_enable_budget=False,
++        fsppo_joint_aux_loss_coef=0.1,
++        fsppo_joint_aux_weighting="advantage_exp",
++        fsppo_joint_aux_temperature=math.sqrt(1.5) / math.log(2),
++        fsppo_joint_aux_weight_clip=weight_clip,
++        fsppo_joint_aux_target="means",
++    )
++    with torch.no_grad():
++        for parameter in alg.policy.critic.parameters():
++            parameter.zero_()
++    alg.init_storage(3, 1, [3], [3], [2])
++    observations = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
++    alg.act(observations, observations)
++    alg.process_env_step(
++        torch.tensor([-1.0, 0.0, 1.0]), torch.ones(3, dtype=torch.bool), {}
++    )
++    alg.compute_returns(observations)
++    # Zero values and terminal transitions give A=[-1,0,1]. At this temperature,
++    # exponentiated standardized advantages are proportional to [1/2,1,2].
++    expected = torch.tensor([3 / 7, 6 / 7, min(12 / 7, weight_clip)])
++    original_generator = alg.storage.mini_batch_generator
++    seen_ids = []
++
++    def record_batches(*args, **kwargs):
++        for batch in original_generator(*args, **kwargs):
++            ids = batch["obs"][:, 0].long()
++            assert torch.allclose(batch["aux_weights"][:, 0], expected[ids])
++            assert not batch["aux_weights"].requires_grad
++            seen_ids.append(ids)
++            yield batch
++
++    monkeypatch.setattr(alg.storage, "mini_batch_generator", record_batches)
++    result = alg.update()
++    assert len(seen_ids) == 4
++    assert torch.equal(
++        torch.cat(seen_ids).sort().values, torch.tensor([0, 0, 1, 1, 2, 2])
++    )
++    assert torch.allclose(alg.storage.aux_weights[0, :, 0], expected)
++    assert result["metrics"]["joint/aux_weight_mean"] == pytest.approx(
++        float(expected.mean())
++    )
++    assert result["pmf_aux_loss"] >= 0
++
++
++@pytest.mark.parametrize("target", ["means", "actions"])
++def test_distillation_target_selection_separates_transport_from_conditional_noise(
++    target,
++):
++    alg = make_algorithm(
++        policy_class=GaussianResidualPMFActorCritic,
++        policy_overrides={"learn_action_perturb_std": True},
++        fsppo_joint_enable_budget=False,
++        fsppo_joint_aux_loss_coef=0.1,
++        fsppo_joint_aux_target=target,
++    )
++    collect(alg)
++    batch = next(alg.storage.mini_batch_generator(1, 1))
++
++    batch["actions"] = batch["actions"].detach().requires_grad_()
++    batch["action_means"] = batch["action_means"].detach().requires_grad_()
++    batch["aux_weights"] = batch["aux_weights"].detach().requires_grad_()
++
++    def auxiliary_value(candidate):
++        # Reuse the same random regression times/noise to isolate the target.
++        torch.manual_seed(123)
++        return alg._batch_loss(candidate)[1]["pmf_aux_loss"]
++
++    initial = auxiliary_value(batch)
++    changed_actions = {**batch, "actions": batch["actions"] + 2}
++    changed_means = {**batch, "action_means": batch["action_means"] + 2}
++    if target == "means":
++        assert torch.equal(auxiliary_value(changed_actions), initial)
++        assert not torch.allclose(auxiliary_value(changed_means), initial)
++    else:
++        assert torch.equal(auxiliary_value(changed_means), initial)
++        assert not torch.allclose(auxiliary_value(changed_actions), initial)
++    initial.backward()
++    assert batch["actions"].grad is None
++    assert batch["action_means"].grad is None
++    assert batch["aux_weights"].grad is None
++
++
++@pytest.mark.parametrize(
++    "policy_class", [PMFActorCritic, GaussianResidualPMFActorCritic]
++)
++def test_rejected_candidate_restores_model_and_adam_state_even_after_previous_updates(
++    policy_class,
++):
++    alg = make_algorithm(
++        policy_class=policy_class,
++        policy_overrides={
++            "learn_action_perturb_std": policy_class is GaussianResidualPMFActorCritic
++        },
++        fsppo_joint_max_backtracks=1,
++    )
+     collect(alg)
+     alg.update()  # Populate optimizer momentum before testing rollback.
+     collect(alg)
+@@ -193,7 +409,11 @@
+     probe = alg._make_probe()
+     alg.optimizer.zero_grad(set_to_none=True)
+     # A known nonzero action-output gradient must violate an effectively zero budget.
+-    alg.policy.actor[-1].bias[:2].sum().backward()
++    if policy_class is GaussianResidualPMFActorCritic:
++        # A variance-only change must also consume the full Gaussian KL budget.
++        alg.policy.actor.action_std_logit.sum().backward()
++    else:
++        alg.policy.actor[-1].bias[:2].sum().backward()
+     model_before = copy.deepcopy(alg.policy.state_dict())
+     optimizer_before = copy.deepcopy(alg.optimizer.state_dict())
+     alg.kl_target = 1e-30
+@@ -288,7 +508,7 @@
+     with pytest.raises(ValueError, match="sampling contract"):
+         other.load_state_dict(changed)
+     other.policy.action_perturb_std *= 2
+-    with pytest.raises(ValueError, match="fixed"):
++    with pytest.raises(ValueError, match="rollout boundary"):
+         other.act(torch.randn(2, 3), torch.randn(2, 3))
+ 
+ 
+@@ -317,6 +537,10 @@
+         {"trust_region_mode": "aspo"},
+         {"schedule": "adaptive"},
+         {"storage_action_noise_std": 0.1},
++        {"fsppo_joint_aux_weighting": "signed"},
++        {"fsppo_joint_aux_target": "latent"},
++        {"fsppo_joint_aux_temperature": 0},
++        {"fsppo_joint_aux_weight_clip": 0.5},
+     ],
+ )
+ def test_invalid_algorithm_contracts_fail_early(overrides):
+@@ -357,10 +581,21 @@
+         return obs, {"observations": {"critic": obs}}
+ 
+ 
+-def make_runner(ema_decay=0.0, action_perturb_std=0.2):
++def make_runner(
++    ema_decay=0.0,
++    action_perturb_std=0.2,
++    policy_overrides=None,
++    algorithm_overrides=None,
++):
+     cfg = FpoRslRlOnPolicyRunnerCfg(
+-        policy=make_policy_cfg(action_perturb_std=action_perturb_std),
+-        algorithm=make_algorithm_cfg(ema_decay=ema_decay, ema_warmup_steps=0),
++        policy=make_policy_cfg(
++            action_perturb_std=action_perturb_std, **(policy_overrides or {})
++        ),
++        algorithm=make_algorithm_cfg(
++            ema_decay=ema_decay,
++            ema_warmup_steps=0,
++            **(algorithm_overrides or {}),
++        ),
+         num_steps_per_env=3,
+         max_iterations=2,
+         save_interval=1,
+@@ -373,14 +608,22 @@
+     return runner
+ 
+ 
+-def test_runner_checkpoint_round_trip_and_cross_algorithm_rejection(tmp_path):
+-    runner = make_runner()
++@pytest.mark.parametrize(
++    "policy_name", ["PMFActorCritic", "GaussianResidualPMFActorCritic"]
++)
++def test_runner_checkpoint_round_trip_and_cross_algorithm_rejection(
++    tmp_path, policy_name
++):
++    policy_overrides = {"class_name": policy_name}
++    if policy_name == "GaussianResidualPMFActorCritic":
++        policy_overrides["learn_action_perturb_std"] = True
++    runner = make_runner(policy_overrides=policy_overrides)
+     collect(runner.alg)
+     runner.alg.update()
+     runner.current_learning_iteration = 3
+     path = str(tmp_path / "joint.pt")
+     runner.save(path)
+-    restored = make_runner()
++    restored = make_runner(policy_overrides=policy_overrides)
+     restored.load(path)
+     assert_tree_equal(restored.alg.policy.state_dict(), runner.alg.policy.state_dict())
+     assert_tree_equal(
+@@ -389,12 +632,31 @@
+     assert_tree_equal(restored.alg.state_dict(), runner.alg.state_dict())
+     assert restored.current_learning_iteration == 3
+     with pytest.raises(ValueError, match="sampling contract"):
+-        make_runner(action_perturb_std=0.1).load(path)
++        make_runner(action_perturb_std=0.1, policy_overrides=policy_overrides).load(
++            path
++        )
+     saved = torch.load(path, weights_only=False)
+     saved["algorithm_class_name"] = "FSPPO"
+     torch.save(saved, tmp_path / "old.pt")
+     with pytest.raises(ValueError, match="algorithm"):
+         restored.load(str(tmp_path / "old.pt"), load_optimizer=False)
++    if policy_name == "GaussianResidualPMFActorCritic":
++        assert not torch.allclose(
++            runner.alg.policy.conditional_action_std(), torch.full((2,), 0.2)
++        )
++        assert torch.count_nonzero(runner.alg.policy.actor.residual[-1].weight[:2]) > 0
++        # Restoring the trainable scale and Adam moments must also reproduce
++        # the next update, rather than only yield matching checkpoint tensors.
++        for algorithm in (runner.alg, restored.alg):
++            torch.manual_seed(321)
++            collect(algorithm)
++            algorithm.update()
++        assert_tree_equal(
++            restored.alg.policy.state_dict(), runner.alg.policy.state_dict()
++        )
++        assert_tree_equal(
++            restored.alg.optimizer.state_dict(), runner.alg.optimizer.state_dict()
++        )
+ 
+ 
+ def test_resume_uses_online_actor_not_ema_weights(tmp_path):
+--- a/isaaclab_experiments/isaaclab_fpo/tests/test_joint_storage.py
++++ b/isaaclab_experiments/isaaclab_fpo/tests/test_joint_storage.py
+@@ -54,6 +54,10 @@
+     transition.action_latent = torch.stack([identifiers, identifiers + 1000.0], dim=-1)
+     transition.action_mean = transition.actions + 2000.0
+     transition.action_log_prob = (identifiers - 3000.0).unsqueeze(-1)
++    transition.action_std = torch.stack(
++        [0.1 + 0.01 * identifiers, 0.2 + 0.02 * identifiers], dim=-1
++    )
++    transition.aux_weight = (0.25 + 0.5 * identifiers).unsqueeze(-1)
+     return transition
+ 
+ 
+@@ -101,15 +105,21 @@
+     expected_latent = first_transition.action_latent.clone()
+     expected_mean = first_transition.action_mean.clone()
+     expected_log_prob = first_transition.action_log_prob.clone()
++    expected_std = first_transition.action_std.clone()
++    expected_weight = first_transition.aux_weight.clone()
+     storage.add_transitions(first_transition)
+ 
+     # A caller reuses and mutates its transition object after this copy.
+     first_transition.action_latent.zero_()
+     first_transition.action_mean.zero_()
+     first_transition.action_log_prob.zero_()
++    first_transition.action_std.zero_()
++    first_transition.aux_weight.zero_()
+     assert torch.equal(storage.action_latents[0], expected_latent)
+     assert torch.equal(storage.action_means[0], expected_mean)
+     assert torch.equal(storage.action_log_probs[0], expected_log_prob)
++    assert torch.equal(storage.action_stds[0], expected_std)
++    assert torch.equal(storage.aux_weights[0], expected_weight)
+ 
+     for step in range(1, 3):
+         storage.add_transitions(make_transition(step, num_envs=2))
+@@ -146,21 +156,14 @@
+     monkeypatch.setattr(torch, "randperm", fake_randperm)
+     batches = list(storage.mini_batch_generator(num_mini_batches=4, num_epochs=2))
+ 
+-    expected_keys = {
+-        "obs",
+-        "critic_obs",
+-        "actions",
+-        "values",
+-        "advantages",
+-        "returns",
+-        "action_latents",
+-        "action_means",
+-        "action_log_probs",
+-    }
+     assert calls == [6, 6]
+     assert len(batches) == 8
+     assert [batch["obs"].shape[0] for batch in batches] == [2, 2, 1, 1] * 2
+-    assert all(set(batch) == expected_keys for batch in batches)
++    for batch in batches:
++        identifiers = batch["action_latents"][:, 0]
++        assert torch.allclose(batch["action_stds"][:, 0], 0.1 + 0.01 * identifiers)
++        assert torch.allclose(batch["action_stds"][:, 1], 0.2 + 0.02 * identifiers)
++        assert torch.allclose(batch["aux_weights"][:, 0], 0.25 + 0.5 * identifiers)
+     first_epoch_ids = torch.cat(
+         [batch["action_latents"][:, 0] for batch in batches[:4]]
+     )
