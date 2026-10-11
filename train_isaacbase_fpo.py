@@ -10,6 +10,7 @@ starting a subprocess.  It is intentionally kept separate from
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import re
@@ -74,6 +75,7 @@ def _positive_int(value: str) -> int:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse launcher/FPO options and preserve remaining Hydra overrides."""
+    supplied = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description="Train FPO on Isaac Lab's native Unitree H1 velocity task."
     )
@@ -123,6 +125,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Resume optimizer and runner state from a checkpoint.")
     parser.add_argument("--eval", action="store_true", help="Evaluate a saved FPO checkpoint instead of training.")
     parser.add_argument("--eval-episodes", "--eval_episodes", dest="eval_episodes", type=_positive_int)
+    parser.add_argument("--flow-eval-fixed-seed", type=int, default=None)
     parser.add_argument(
         "--flow-eval-modes",
         "--flow_eval_modes",
@@ -131,6 +134,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=("zero", "fixed_seed", "random"),
         default=None,
     )
+    parser.add_argument(
+        "--pmf-ablation", choices=("pg_only", "pg_pmf"),
+        help="FSPPOJoint A/B ablation: disable or enable the complete pMF auxiliary loss.",
+    )
+    parser.add_argument(
+        "--pmf-loss-coef", type=float, default=None,
+        help="Positive pMF loss weight for --pmf-ablation pg_pmf (default: YAML weight or 0.01).",
+    )
+    parser.add_argument(
+        "--pmf-next-step", choices=("joint_pg", "pmd", "pmd_tr", "joint_pmf"),
+        help="Select an independent Next Step experiment using the common YAML settings.",
+    )
+    parser.add_argument(
+        "--learn-terminal-std", action="store_true",
+        help="Additional A/D ablation: learn per-action terminal Gaussian scales.",
+    )
+    parser.add_argument(
+        "--pmf-validation", action="store_true",
+        help="With --eval, compare the one-step pMF map with diagonal-field ODE integration.",
+    )
+    parser.add_argument(
+        "--use-checkpoint-config", action="store_true",
+        help="Load params/agent.yaml beside the checkpoint for faithful policy reconstruction.",
+    )
+    parser.add_argument("--validation-output", type=Path)
+    parser.add_argument("--state-bank-in", type=Path, help="Reuse raw observations and paired initial noises from a saved bank.")
+    parser.add_argument("--state-bank-out", type=Path, help="Also save the collected bank to this path for other checkpoints.")
+    parser.add_argument("--validation-states", type=_positive_int, default=256)
+    parser.add_argument("--validation-noises", type=_positive_int, default=8)
+    parser.add_argument("--validation-seed", type=int, default=12345)
+    parser.add_argument("--validation-batch-size", type=_positive_int, default=256)
+    parser.add_argument("--ode-steps", type=_positive_int, nargs="+", default=[8, 32, 128])
     parser.add_argument("--video", action="store_true", help="Record the first evaluation/training episode.")
     parser.add_argument("--video-length", "--video_length", dest="video_length", type=_positive_int, default=DEFAULT_VIDEO_LENGTH)
     parser.add_argument("--physics", choices=PHYSICS_PRESETS, default="isaacsim_physx")
@@ -147,8 +182,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true", help="Force headless Isaac Sim execution.")
     parser.set_defaults(device="cuda")
 
-    args, remaining = parser.parse_known_args(argv)
+    args, remaining = parser.parse_known_args(supplied)
+    args.seed_explicit = any(item == "--seed" or item.startswith("--seed=") for item in supplied)
     args.hydra_overrides = list(remaining)
+    if args.pmf_validation and not args.eval:
+        parser.error("--pmf-validation requires --eval and a saved checkpoint")
+    if args.use_checkpoint_config and not (args.eval or args.resume):
+        parser.error("--use-checkpoint-config requires --eval or --resume")
+    if args.pmf_loss_coef is not None:
+        if args.pmf_ablation != "pg_pmf":
+            parser.error("--pmf-loss-coef requires --pmf-ablation pg_pmf")
+        if not math.isfinite(args.pmf_loss_coef) or args.pmf_loss_coef <= 0:
+            parser.error("--pmf-loss-coef must be finite and positive")
+    if args.pmf_next_step is not None and args.pmf_ablation is not None:
+        parser.error("--pmf-next-step and --pmf-ablation select different experiment families")
+    if args.learn_terminal_std and args.pmf_next_step not in ("joint_pg", "joint_pmf"):
+        parser.error("--learn-terminal-std requires --pmf-next-step joint_pg or joint_pmf")
     return args
 
 
@@ -173,16 +222,28 @@ def _load_fpo_cfg(args: argparse.Namespace):
     )
     from isaaclab_fpo.patches import apply_isaaclab_patches
 
-    # Keep compatibility with the FPO repository's config override behavior.
+    # Isaac Lab 3 binds configclass.from_dict directly at decoration time.
+    # Use the updater after patching so already-created config classes also
+    # accept MISSING fields, int-to-float values and None defaults from YAML.
     apply_isaaclab_patches()
+    from isaaclab.utils.dict import update_class_from_dict
 
     import yaml
 
     config_path = args.fpo_config.expanduser().resolve()
     if not config_path.is_file():
         raise FileNotFoundError(f"FPO config not found: {config_path}")
+    # Isaac Lab's dump_yaml writes Python tuple tags for configuration tuples.
+    # Accept just that tag without enabling arbitrary Python object loading.
+    class ConfigLoader(yaml.SafeLoader):
+        pass
+
+    ConfigLoader.add_constructor(
+        "tag:yaml.org,2002:python/tuple",
+        lambda loader, node: tuple(loader.construct_sequence(node)),
+    )
     with config_path.open(encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file) or {}
+        config = yaml.load(config_file, Loader=ConfigLoader) or {}
     if not isinstance(config, Mapping):
         raise TypeError(f"FPO config must contain a mapping: {config_path}")
     dynamics_cfg = config.get("dynamics_encoder")
@@ -207,14 +268,28 @@ def _load_fpo_cfg(args: argparse.Namespace):
 
     runner_values = {key: config[key] for key in _RUNNER_CONFIG_KEYS if key in config}
     if runner_values:
-        agent_cfg.from_dict(runner_values)
+        update_class_from_dict(agent_cfg, runner_values)
     if isinstance(config.get("policy"), Mapping):
-        agent_cfg.policy.from_dict(dict(config["policy"]))
+        update_class_from_dict(agent_cfg.policy, dict(config["policy"]))
     if isinstance(config.get("algorithm"), Mapping):
-        agent_cfg.algorithm.from_dict(dict(config["algorithm"]))
+        update_class_from_dict(agent_cfg.algorithm, dict(config["algorithm"]))
+
+    if args.pmf_next_step is not None:
+        variant = args.pmf_next_step
+        joint = variant in ("joint_pg", "joint_pmf")
+        agent_cfg.policy.class_name = "LearnedStdPMFActorCritic" if joint else "PMFActorCritic"
+        agent_cfg.policy.learn_action_perturb_std = args.learn_terminal_std
+        agent_cfg.algorithm.class_name = "FSPPOJointAligned" if joint else "PMFPMD"
+        agent_cfg.algorithm.fsppo_joint_enable_budget = variant == "pmd_tr"
+        agent_cfg.algorithm.fsppo_joint_aux_loss_coef = 0.01 if variant == "joint_pmf" else 0.0
+        agent_cfg.algorithm.fsppo_joint_entropy_coef = 0.01 if joint else 0.0
+        # Adaptive conditional Gaussian KL is supported by A/D. B/C improve
+        # candidates with Q and fit pMF directly, with no PPO actor surrogate.
+        agent_cfg.algorithm.schedule = "adaptive" if joint else "fixed"
 
     # CLI values are authoritative for this launcher.
-    agent_cfg.seed = args.seed
+    if not args.use_checkpoint_config or args.seed_explicit:
+        agent_cfg.seed = args.seed
     agent_cfg.device = args.device
     if args.experiment_name is not None:
         agent_cfg.experiment_name = args.experiment_name
@@ -226,6 +301,24 @@ def _load_fpo_cfg(args: argparse.Namespace):
         agent_cfg.eval_episodes = args.eval_episodes
     if args.flow_eval_modes is not None:
         agent_cfg.flow_eval_modes = args.flow_eval_modes
+    if args.flow_eval_fixed_seed is not None:
+        agent_cfg.flow_eval_fixed_seed = args.flow_eval_fixed_seed
+    elif agent_cfg.flow_eval_fixed_seed is None:
+        agent_cfg.flow_eval_fixed_seed = 12345
+    if args.pmf_ablation is not None:
+        if (agent_cfg.policy.class_name, agent_cfg.algorithm.class_name) != (
+            "PMFActorCritic", "FSPPOJoint"
+        ):
+            raise ValueError("--pmf-ablation requires PMFActorCritic with FSPPOJoint")
+        if args.pmf_ablation == "pg_only":
+            agent_cfg.algorithm.fsppo_joint_aux_loss_coef = 0.0
+        else:
+            coefficient = args.pmf_loss_coef
+            if coefficient is None:
+                coefficient = agent_cfg.algorithm.fsppo_joint_aux_loss_coef or 0.01
+            if not math.isfinite(coefficient) or coefficient <= 0:
+                raise ValueError("The PG+pMF auxiliary coefficient must be finite and positive")
+            agent_cfg.algorithm.fsppo_joint_aux_loss_coef = coefficient
     if args.max_iterations is not None:
         agent_cfg.max_iterations = args.max_iterations
     elif args.total_env_steps is not None:
@@ -307,6 +400,10 @@ def _prepare_env_cfg(args: argparse.Namespace, agent_cfg: Any):
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=num_envs, overrides=overrides)
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args.device
+    if agent_cfg.algorithm.class_name == "PMFPMD":
+        if not hasattr(env_cfg, "compute_final_obs"):
+            raise ValueError("PMFPMD requires native support for pre-reset final observations")
+        env_cfg.compute_final_obs = True
     return env_cfg
 
 
@@ -319,10 +416,35 @@ def _write_run_files(log_dir: Path, env_cfg: Any, agent_cfg: Any, task: str) -> 
         str(log_dir),
         library="isaaclab_fpo",
         task=task,
-        metadata={"agent": "fpo", "runner": "isaaclab_fpo"},
+        metadata={
+            "agent": agent_cfg.algorithm.class_name,
+            "policy": agent_cfg.policy.class_name,
+            "runner": "isaaclab_fpo",
+            "seed": agent_cfg.seed,
+            "num_envs": env_cfg.scene.num_envs,
+            "num_steps_per_env": agent_cfg.num_steps_per_env,
+            "max_iterations": agent_cfg.max_iterations,
+            "pmf_aux_loss_coef": agent_cfg.algorithm.fsppo_joint_aux_loss_coef,
+            "terminal_std_learned": agent_cfg.policy.learn_action_perturb_std,
+            "terminal_std_initial": agent_cfg.policy.action_perturb_std,
+            "pmd_trust_region": (
+                agent_cfg.algorithm.fsppo_joint_enable_budget
+                if agent_cfg.algorithm.class_name == "PMFPMD" else None
+            ),
+        },
     )
     dump_yaml(str(log_dir / "params" / "env.yaml"), env_cfg)
     dump_yaml(str(log_dir / "params" / "agent.yaml"), agent_cfg)
+
+
+def _training_iterations(args: argparse.Namespace, agent_cfg: Any, runner: Any) -> int:
+    """Treat the new experiments' resume budget as a final cumulative target."""
+    if args.resume and agent_cfg.algorithm.class_name in ("PMFPMD", "FSPPOJointAligned"):
+        if args.total_env_steps is not None and args.max_iterations is None:
+            remaining = args.total_env_steps - runner.tot_timesteps
+            return max(0, math.ceil(remaining / (args.num_envs * agent_cfg.num_steps_per_env)))
+        return max(0, agent_cfg.max_iterations - runner.current_learning_iteration)
+    return agent_cfg.max_iterations
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -335,7 +457,6 @@ def _run(args: argparse.Namespace) -> int:
     _insert_fpo_root(args.fpo_root.expanduser())
     agent_cfg, config_path = _load_fpo_cfg(args)
     args.physics = _requested_physics(args)
-    env_cfg = _prepare_env_cfg(args, agent_cfg)
     log_root = _resolve_log_root(args, agent_cfg, isaaclab_root)
     checkpoint = _resolve_checkpoint(args, log_root)
     if (args.eval or args.resume) and checkpoint is None and not args.dry_run:
@@ -344,6 +465,16 @@ def _run(args: argparse.Namespace) -> int:
         )
     if checkpoint is not None and not checkpoint.is_file() and not args.dry_run:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+    if args.use_checkpoint_config:
+        if checkpoint is None:
+            raise FileNotFoundError("--use-checkpoint-config needs a resolvable checkpoint")
+        args.fpo_config = checkpoint.parent / "params" / "agent.yaml"
+        agent_cfg, config_path = _load_fpo_cfg(args)
+    if args.pmf_validation and agent_cfg.policy.class_name not in (
+        "PMFActorCritic", "LearnedStdPMFActorCritic"
+    ):
+        raise ValueError("--pmf-validation requires a supported pMF transport policy")
+    env_cfg = _prepare_env_cfg(args, agent_cfg)
 
     log_dir = _make_log_dir(args, agent_cfg, isaaclab_root, checkpoint)
     args.enable_cameras = bool(getattr(args, "enable_cameras", False) or args.video)
@@ -359,21 +490,34 @@ def _run(args: argparse.Namespace) -> int:
     print(
         f"[isaacbase-fpo] mode={'eval' if args.eval else 'train'} device={args.device} "
         f"num_envs={args.eval_num_envs if args.eval else args.num_envs} "
-        f"num_steps_per_env={agent_cfg.num_steps_per_env} max_iterations={agent_cfg.max_iterations}"
+        f"num_steps_per_env={agent_cfg.num_steps_per_env} max_iterations={agent_cfg.max_iterations} "
+        f"policy={agent_cfg.policy.class_name} algorithm={agent_cfg.algorithm.class_name}"
     )
     print(f"[isaacbase-fpo] log_dir={log_dir}")
+    if args.pmf_ablation is not None:
+        print(
+            f"[isaacbase-fpo] pmf_ablation={args.pmf_ablation} "
+            f"aux_loss_coef={agent_cfg.algorithm.fsppo_joint_aux_loss_coef}"
+        )
+    if args.pmf_validation:
+        print(
+            f"[isaacbase-fpo] pmf_validation=true ode_steps={args.ode_steps} "
+            f"state_bank={args.state_bank_in} seed={args.validation_seed}"
+        )
     print(
         "[isaacbase-fpo] observation contract=Isaac Lab policy group -> flattened tensor; "
         "FPO YAML obs/dynamics_encoder sections are not used by the generic wrapper"
     )
 
     if args.dry_run:
-        actual_env_steps = (
-            agent_cfg.max_iterations
-            * (args.eval_num_envs if args.eval else args.num_envs)
-            * agent_cfg.num_steps_per_env
-        )
-        print(f"[isaacbase-fpo] physics={args.physics} actual_env_steps={actual_env_steps}")
+        if args.eval:
+            print(
+                f"[isaacbase-fpo] physics={args.physics} "
+                f"eval_episodes_per_mode={agent_cfg.eval_episodes} modes={agent_cfg.flow_eval_modes}"
+            )
+        else:
+            actual_env_steps = agent_cfg.max_iterations * args.num_envs * agent_cfg.num_steps_per_env
+            print(f"[isaacbase-fpo] physics={args.physics} actual_env_steps={actual_env_steps}")
         print("[isaacbase-fpo] subprocess=false (active Python environment)")
         return 0
 
@@ -413,12 +557,42 @@ def _run(args: argparse.Namespace) -> int:
                             f"reward={metrics['mean_reward']:.4f} +/- {metrics['std_reward']:.4f}, "
                             f"length={metrics['mean_length']:.2f} +/- {metrics['std_length']:.2f}"
                         )
+                    if args.pmf_validation:
+                        from isaaclab_fpo.pmf_validation import validate_pmf_checkpoint
+
+                        output_dir = args.validation_output or (
+                            checkpoint.parent / "pmf_validation" / checkpoint.stem
+                            / f"{datetime.now():%Y-%m-%d_%H-%M-%S_%f}"
+                        )
+                        report = validate_pmf_checkpoint(
+                            runner, checkpoint, output_dir,
+                            state_bank_path=args.state_bank_in,
+                            state_bank_output_path=args.state_bank_out,
+                            num_states=args.validation_states,
+                            samples_per_state=args.validation_noises,
+                            seed=args.validation_seed,
+                            ode_steps=args.ode_steps,
+                            batch_size=args.validation_batch_size,
+                            task_name=args.task,
+                        )
+                        report["closed_loop_evaluation"] = results
+                        report["closed_loop_policy"] = "one_step_transport_without_conditional_gaussian"
+                        report["agent_config_path"] = str(config_path)
+                        report["hydra_overrides"] = args.hydra_overrides
+                        report["physics"] = args.physics
+                        with (output_dir / "report.json").open("w", encoding="utf-8") as report_file:
+                            json.dump(report, report_file, indent=2, allow_nan=False)
+                        print(f"[isaacbase-fpo] pMF validation report={output_dir / 'report.json'}")
                     return 0
                 runner.load(str(checkpoint), load_optimizer=True)
 
             _write_run_files(log_dir, env_cfg, agent_cfg, args.task)
+            learning_iterations = _training_iterations(args, agent_cfg, runner)
+            if learning_iterations == 0:
+                print("[isaacbase-fpo] checkpoint already meets the requested training budget")
+                return 0
             runner.learn(
-                num_learning_iterations=agent_cfg.max_iterations,
+                num_learning_iterations=learning_iterations,
                 init_at_random_ep_len=False,
             )
         finally:
@@ -434,7 +608,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.fpo_root = (project_root / args.fpo_root).resolve()
     if not args.fpo_config.is_absolute():
         args.fpo_config = (project_root / args.fpo_config).resolve()
+    for name in ("validation_output", "state_bank_in", "state_bank_out"):
+        value = getattr(args, name)
+        if value is not None:
+            setattr(args, name, value.expanduser().resolve())
+    if args.checkpoint is not None and args.checkpoint not in (Path("latest"), Path("best")):
+        args.checkpoint = args.checkpoint.expanduser().resolve()
+    if args.log_root is not None:
+        args.log_root = args.log_root.expanduser().resolve()
     isaaclab_root = args.isaaclab_root.expanduser().resolve()
+    args.isaaclab_root = isaaclab_root
     old_cwd = Path.cwd()
     try:
         # Isaac Lab's task/Hydra paths and relative log conventions are rooted

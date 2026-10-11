@@ -1,0 +1,92 @@
+# Common Flat-H1 A/B/C/D contract. The new launcher resolves only the
+# algorithm/policy family, auxiliary coefficient, scheduler and C trust flag.
+seed: 0
+device: cuda
+num_steps_per_env: 32
+max_iterations: 2442
+empirical_normalization: false
+randomize_reset_episode_progress: 0.0
+clip_actions: null
+save_interval: 2500
+experiment_name: h1_pmf_next_step
+run_name: pmd
+logger: tensorboard
+eval_episodes: 32
+flow_eval_modes: [random]
+flow_eval_fixed_seed: 42
+enable_post_training_eval: false
+resume: false
+load_run: ".*"
+load_checkpoint: "model_.*.pt"
+
+policy:
+  class_name: PMFActorCritic
+  init_noise_std: 1.0
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
+  activation: elu
+  actor_scale: 1.0
+  actor_mlp_output_scale: 1.0
+  sampling_steps: 1
+  training_sampling_steps: 1
+  action_perturb_std: 0.1
+  learn_action_perturb_std: false
+  action_perturb_std_min: 0.01
+  action_perturb_std_max: 3.0
+  pmf_logit_normal_mean: 0.02
+  pmf_logit_normal_std: 0.1
+  pmf_fm_proportion: 0.5
+  pmf_aux_v_loss_coef: 1.0
+  pmf_time_eps: 0.05
+  pmf_adaptive_gradient_norm_p: 0.0
+  pmf_adaptive_gradient_norm_eps: 0.01
+
+algorithm:
+  class_name: PMFPMD
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.001
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  desired_kl: 0.01
+  trust_region_mode: ppo
+  normalize_advantage: true
+  normalize_advantage_per_mini_batch: false
+  advantage_clamp: [100.0, 100.0]
+  n_samples_per_action: 8
+  storage_action_noise_std: 0.0
+  knn_entropy_coef: 0.0
+  fsppo_joint_entropy_coef: 0.0
+  fsppo_joint_enable_budget: false
+  fsppo_joint_aux_loss_coef: 0.0
+  fsppo_joint_adv_v_loss_coef: 0.0
+  fsppo_joint_kl_target: 0.01
+  fsppo_joint_kl_coef: 0.0
+  fsppo_joint_dual_lr: 0.0
+  fsppo_joint_map_samples: 8
+  fsppo_joint_probe_size: 1024
+  fsppo_joint_max_backtracks: 5
+  fsppo_joint_backtrack_factor: 0.5
+  action_perturb_std_final: null
+  action_perturb_std_decay_env_steps: 0
+  ema_decay: 0.0
+  ema_warmup_steps: 0
+  pmd_num_candidates: 8
+  pmd_q_noise_samples: 4
+  pmd_q_hidden_dims: [512, 256, 128]
+  pmd_q_learning_rate: 0.001
+  pmd_value_learning_rate: 0.001
+  pmd_q_epochs: 4
+  pmd_q_warmup_updates: 10
+  pmd_q_holdout_fraction: 0.1
+  pmd_projection_epochs: 5
+  pmd_batch_size: 256
+  pmd_temperature: 1.0
+  pmd_min_ess_fraction: 0.5

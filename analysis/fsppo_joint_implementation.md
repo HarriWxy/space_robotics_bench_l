@@ -15,8 +15,9 @@ a ~ N(mean, sigma^2 I), sigma = policy.action_perturb_std > 0
 ```
 
 Each rollout transition stores the actual generating `xi`, raw Gaussian action,
-behavior mean, and conditional action log-probability. The prior on `xi` is fixed
-and cancels from the joint importance ratio:
+behavior mean, and conditional action log-probability. The noise scale is fixed
+within one rollout and its update; it may be annealed between rollouts. The prior
+on `xi` is fixed and cancels from the joint importance ratio:
 
 ```text
 log_ratio = log N(a; F_new(obs, xi), sigma^2 I)
@@ -39,6 +40,8 @@ KL(marginal_old || marginal_new) <= K_joint
 loss = clipped_PPO_loss + value_loss_coef * value_loss
      + kl_coefficient * estimated_K_joint
      + fsppo_joint_aux_loss_coef * pmf_regression_loss
+     + fsppo_joint_adv_v_loss_coef
+       * mean_i(stopgrad(max(A_i, 0)) * mean_k(v_loss[i, k]))
 ```
 
 The equality and marginal bound concern the prior expectation at a fixed state.
@@ -94,7 +97,9 @@ Defaults select a two-environment, two-iteration smoke run.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `policy.action_perturb_std` | 0.02 | Fixed Gaussian action noise in public action coordinates |
+| `policy.action_perturb_std` | 0.05 | Initial Gaussian action noise standard deviation in public action coordinates |
+| `algorithm.action_perturb_std_final` | 0.01 | Final action-noise standard deviation |
+| `algorithm.action_perturb_std_decay_env_steps` | 80000000 | Global environment transitions for linear annealing; held constant within each rollout and PPO update |
 | `algorithm.fsppo_joint_kl_target` | 0.01 | Mean KL budget on the fixed acceptance probe |
 | `algorithm.fsppo_joint_kl_coef` | 1.0 | Initial coefficient on normalized map KL |
 | `algorithm.fsppo_joint_dual_lr` | 0.1 | Penalty coefficient adaptation; zero disables adaptation |
@@ -103,6 +108,12 @@ Defaults select a two-environment, two-iteration smoke run.
 | `algorithm.fsppo_joint_max_backtracks` | 5 | Retries after the initial candidate |
 | `algorithm.fsppo_joint_backtrack_factor` | 0.5 | Step-size multiplier for each retry |
 | `algorithm.fsppo_joint_aux_loss_coef` | 0.0 | Independent positive pMF regression weight |
+| `algorithm.fsppo_joint_adv_v_loss_coef` | 0.0 | Detached positive-advantage weighting for the per-action pMF v loss |
+
+The SRB YAML currently uses `sigma=0.05` and anneals to `0.01` over 80M
+environment transitions. Its variance therefore changes from `0.0025` to
+`0.0001`. This anneals only the added public-action Gaussian; the transport
+latent remains sampled from `N(0, I)`.
 
 These are initial experimental settings, not tuned locomotion hyperparameters.
 `desired_kl` and legacy CFM-score parameters do not control the new trust region.
@@ -116,12 +127,24 @@ other intervals. Setting a positive auxiliary coefficient enables positive pMF
 regression separately from the advantage-weighted PPO loss. Its exact global
 anchor count is randomly assigned rather than tied to fixed environment IDs.
 
+The positive-advantage v-head ablation uses `hyperparams/fsppo_joint_adv_v.yaml`.
+It sets `fsppo_joint_aux_loss_coef=0` and
+`fsppo_joint_adv_v_loss_coef=0.01`, leaving the joint Gaussian ratio unchanged.
+When only this term is active, the learner evaluates the pMF v residual without
+computing the mean-flow JVP. The v head is not the one-step action output, so
+this auxiliary term reaches the deployed map through the actor's shared trunk.
+
 ## Running and evaluating
 
 ```bash
 conda activate srb
 python train_isaacbase_fsppo_joint.py --dry-run
 python train_isaacbase_fsppo_joint.py --num-envs 2 --max-iterations 2
+
+# Positive-advantage v-head ablation
+python train_isaacbase_fsppo_joint.py --fpo-config hyperparams/fsppo_joint_adv_v.yaml \
+  --experiment-name h1_fsppo_joint_adv_v --run-name adv_v_smoke \
+  --num-envs 2 --max-iterations 2
 
 # Independent full run; do not compare to old runs with different rollout sizes.
 python train_isaacbase_fsppo_joint.py \
