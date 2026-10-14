@@ -4,14 +4,14 @@ class_name: OnPolicyRunner
 device: null
 num_steps_per_env: 32
 init_at_random_ep_len: true
-max_iterations: 100000
+max_iterations: 500000
 empirical_normalization: false
 obs_groups:
   actor: [proprio, command, proprio_dyn]
   critic: [proprio, command, proprio_dyn]
 clip_actions: null
 check_for_nan: true
-save_interval: 500
+save_interval: 5000
 experiment_name: srb_rsl_rl_ppo
 run_name: ""
 logger: tensorboard
@@ -45,7 +45,7 @@ algorithm:
   entropy_coef: 0.01
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 0.001
+  learning_rate: 0.0001
   schedule: adaptive
   gamma: 0.99
   lam: 0.95

@@ -32,7 +32,7 @@ if __name__ == "__main__":
         "env.curriculum.command_mode=forward",
         "env.curriculum.forward_command=[0.05,0.0,0.0]",
         "env.curriculum.joint_position_ranges=[[0.9,1.1],[0.9,1.1],[0.9,1.1]]",
-        "env.episode_length_s=30.0",
+        # "env.episode_length_s=30.0",
         "env.terminations.tracking_linear_error_threshold=0.1",
         "env.terminations.tracking_angular_error_threshold=0.1",
         "env.terminations.tracking_min_body_up_z=0.9",

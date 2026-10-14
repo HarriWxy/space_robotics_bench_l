@@ -1,7 +1,14 @@
 import sys
 
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from srb.__main__ import main
 
+def _configure_torch_matmul_precision() -> None:
+    """Enable TF32-backed float32 matmuls before building the policy."""
+    import torch
+
+    torch.set_float32_matmul_precision("high")
 
 def run_srb(argv):
     old_argv = sys.argv[:]
@@ -13,6 +20,7 @@ def run_srb(argv):
 
 
 if __name__ == "__main__":
+    _configure_torch_matmul_precision()
     run_srb([
         "agent",
         "train",
@@ -20,30 +28,32 @@ if __name__ == "__main__":
         # "--untrained",
         # "rand",
         "--algo",
-        "fpo",  # policyflow
+        "rsl_rl_ppo",  # policyflow  fpo 
         "--env",
         "locomotion_velocity_tracking_c",
         # "--cfg",
         # "IGNORE",
-        "env.domain=moon",
-        "env.curriculum.enabled=false",
-        "env.curriculum.fixed_stage=2",
-        "env.curriculum.command_mode=forward",
-        "env.curriculum.forward_command=[0.05,0.0,0.0]",
-        "env.curriculum.joint_position_ranges=[[0.9,1.1],[0.9,1.1],[0.9,1.1]]",
-        "env.episode_length_s=30.0",
-        "env.terminations.tracking_linear_error_threshold=0.1",
-        "env.terminations.tracking_angular_error_threshold=0.1",
-        "env.terminations.tracking_min_body_up_z=0.9",
-        "env.terminations.success_min_duration_s=30.0",
-        "env.terminations.success_settle_time_s=1.0",
-        "env.terminations.success_tracking_fraction=0.9",
+        # Isaac Lab H1 Flat uses Earth gravity and a global ground plane.
+        "env.domain=moon", # keep moon environ
+        # "env.curriculum.enabled=false",
+        # "env.curriculum.fixed_stage=0",
+        # "env.curriculum.command_mode=isaac_flat",
+        # "env.curriculum.joint_position_ranges=[[1.0,1.0],[1.0,1.0],[1.0,1.0]]",
+        # "env.episode_length_s=20.0",
+        # "env.terminations.tracking_linear_error_threshold=0.5",
+        # "env.terminations.tracking_angular_error_threshold=0.8",
+        # "env.terminations.tracking_min_body_up_z=-1.0",
+        # "env.terminations.success_min_duration_s=20.0",
+        # "env.terminations.success_settle_time_s=0.0",
+        # "env.terminations.success_tracking_fraction=0.9",
+        "env.sim.physics.enable_ccd=false",
         # "env.sample=primitive",
         "env.robot=unitree_h1",
         # "env.stage=2",
         # "env.stage2_easy=True",
         # "env.episode_length_s=8.0",
-        "env.num_envs=256",
+        "env.malloc_scale=0.25",
+        "env.num_envs=1024",
         # "env.num_envs=1",
         "env.sim.device=cuda",
         "--headless",

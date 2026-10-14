@@ -181,7 +181,7 @@ class Task(OrbitalEnv):
             tf_pos_target=self._tf_pos_target,
             # Contacts
             contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
-            contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
+            contact_robot=self._contacts_robot.compute_first_contact(self.step_dt).torch,
             # IMU
             imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
             imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,

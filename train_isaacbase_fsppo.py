@@ -1,20 +1,20 @@
-"""Debug/train FSPPO on Isaac Lab's native Unitree H1 velocity task.
+"""Train fixed-penalty FSPPO on Isaac Lab's native Unitree H1 task.
 
-This is a thin Flow-Space PPO-specific entry point over
-``train_isaacbase_fpo.py``.  It keeps the native Isaac Lab lifecycle, wrapper,
-checkpoint handling, and Hydra override behavior in one place while selecting
-the one-NFE pMF policy and FSPPO transport-map trust region through a dedicated
-YAML config.
+This is a thin FSPPO-specific entry point over
+``train_isaacbase_fpo.py``.  The shared launcher owns Isaac Lab startup,
+observation/action wrapping, checkpoint handling, evaluation, and Hydra
+overrides; this file only selects the dedicated ``fsppo.yaml`` configuration.
 
-The defaults are intentionally small enough for a smoke/debug run.  Override
-them on the command line for a real experiment, for example::
+The defaults are intentionally small enough for a smoke run.  Override them
+for a real experiment, for example::
 
     python train_isaacbase_fsppo.py \
         --task Isaac-Velocity-Rough-H1 --num-envs 256 \
         --total-env-steps 100000000 --run-name h1_fsppo
 
-The wrapper accepts every option supported by ``train_isaacbase_fpo.py`` and
-passes trailing Isaac Lab/Hydra overrides through unchanged.
+All options accepted by ``train_isaacbase_fpo.py`` remain available, including
+``--resume``, ``--checkpoint``, ``--eval``, and trailing Isaac Lab/Hydra
+overrides.
 """
 
 from __future__ import annotations
@@ -25,24 +25,25 @@ from pathlib import Path
 
 from train_isaacbase_fpo import main as _run_fpo_entrypoint
 
+
 _DEFAULT_CONFIG = Path(__file__).resolve().parent / "hyperparams" / "fsppo.yaml"
 _DEFAULT_VALUE_ARGS = (
     "--task",
     "Isaac-Velocity-Flat-H1",
     "--num-envs",
-    "1024",
+    "2",
     "--max-iterations",
-    "10000",
+    "1",
     "--experiment-name",
     "h1_fsppo",
     "--run-name",
-    "flatdbug",
+    "debug",
 )
 _DEFAULT_FLAGS = ("--headless",)
 
 
 def _has_option(argv: Sequence[str], name: str) -> bool:
-    """Return whether an option is present in ``--name value`` or ``--name=value`` form."""
+    """Return whether an option uses either ``--name value`` or ``--name=value``."""
 
     aliases = {
         "--num-envs": ("--num-envs", "--num_envs"),
@@ -59,18 +60,19 @@ def _has_option(argv: Sequence[str], name: str) -> bool:
 
 
 def build_args(argv: Sequence[str] | None = None) -> list[str]:
-    """Build FSPPO arguments while allowing every debug default to be overridden."""
+    """Build FSPPO arguments while allowing every smoke default to be overridden."""
 
     supplied = list(sys.argv[1:] if argv is None else argv)
-    if _has_option(supplied, "--fpo-config"):
-        config_args: list[str] = []
-    else:
-        config_args = ["--fpo-config", str(_DEFAULT_CONFIG)]
+    config_args = (
+        []
+        if _has_option(supplied, "--fpo-config")
+        else ["--fpo-config", str(_DEFAULT_CONFIG)]
+    )
 
     defaults: list[str] = []
     for name, value in zip(_DEFAULT_VALUE_ARGS[::2], _DEFAULT_VALUE_ARGS[1::2]):
-        # --total-env-steps is an alternative to --max-iterations in the
-        # shared launcher.  Do not let the debug default mask that option.
+        # The shared launcher derives iterations from --total-env-steps.  Do
+        # not let the smoke default mask that explicit transition budget.
         if name == "--max-iterations":
             if _has_option(supplied, name) or _has_option(
                 supplied, "--total-env-steps"
@@ -79,6 +81,7 @@ def build_args(argv: Sequence[str] | None = None) -> list[str]:
         elif _has_option(supplied, name):
             continue
         defaults.extend((name, value))
+
     visual_app_requested = any(
         _has_option(supplied, option)
         for option in ("--visualizer", "--viz", "--xr", "--livestream")
@@ -91,7 +94,7 @@ def build_args(argv: Sequence[str] | None = None) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run FSPPO using the shared native Isaac Lab FPO launcher."""
+    """Run fixed-penalty FSPPO through the shared native FPO launcher."""
 
     return _run_fpo_entrypoint(build_args(argv))
 

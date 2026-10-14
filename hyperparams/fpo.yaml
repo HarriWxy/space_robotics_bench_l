@@ -2,7 +2,7 @@
 # 6104 * 64 * 256 = 100,007,936 environment transitions.
 num_steps_per_env: 32
 max_iterations: 12104 
-empirical_normalization: true
+empirical_normalization: false
 randomize_reset_episode_progress: 0.0
 clip_actions: null # 1.0
 save_interval: 2500
@@ -53,7 +53,7 @@ policy:
   actor_hidden_dims: [512, 256, 128]
   critic_hidden_dims: [512, 256, 128]
   activation: elu
-  actor_scale: 0.25 #  1.0
+  actor_scale: 1.0
   actor_mlp_output_scale: 1.0
   actor_final_layer_weight_scale: null
   timestep_embed_dim: 8
@@ -65,14 +65,14 @@ policy:
 
 algorithm:
   class_name: FPO
-  num_learning_epochs: 4
+  num_learning_epochs: 16
   num_mini_batches: 4
-  learning_rate: 1.0e-3
+  learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   adam_betas: [0.9, 0.999]
-  schedule: adaptive
+  schedule: fixed
   # Match PPO/SAC/ExO's effective 25 Hz horizon for the main comparison.
-  gamma: 0.997
+  gamma: 0.99
   lam: 0.95
   knn_entropy_coef: 0.0
   knn_entropy_k: 1

@@ -17,14 +17,16 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 DEFAULT_ISAACLAB_ROOT = Path("/root/isaaclab")
-DEFAULT_TASK = "Isaac-Velocity-Flat-H1"
+DEFAULT_TASK = "Isaac-Velocity-Rough-H1"
 DEFAULT_NUM_ENVS = 256
 DEFAULT_TOTAL_ENV_STEPS = 100_000_000
 DEFAULT_SEED = 0
-DEFAULT_RUN_NAME = "srb_h1_ppo_baseline"
-DEFAULT_EVAL_NUM_ENVS = 8
+DEFAULT_RUN_NAME = "srb_h1_ppo_baseline_abla"
+DEFAULT_EVAL_NUM_ENVS = 16
 DEFAULT_EVAL_VISUALIZER = "kit"
 
 # Both base H1 RSL-RL agent configs use 24 rollout steps per environment.
@@ -84,6 +86,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--play",
         dest="eval",
         action="store_true",
+        # default=True,
         help="Evaluate a checkpoint with Isaac Lab's play entry point.",
     )
     parser.add_argument(
@@ -135,7 +138,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--experiment-name",
         "--experiment_name",
         dest="experiment_name",
-        default=None,
+        default="h1_rough_ablation",
     )
     parser.add_argument(
         "--run-name",
@@ -171,6 +174,8 @@ def build_command(args: argparse.Namespace) -> tuple[list[str], int | None]:
             str(args.eval_num_envs),
             "--viz",
             args.visualizer,
+            "--train_env_cfg",
+            'env.sim.gravity=[0.0,0.0,-3.711]',
             "--seed",
             str(args.seed),
         ]
@@ -204,6 +209,10 @@ def build_command(args: argparse.Namespace) -> tuple[list[str], int | None]:
         str(max_iterations),
         "--seed",
         str(args.seed),
+        "--log-root",
+        "/root/space_robotics_bench_l/logs/pmf_ablation",
+        # "env.scene.height_scanner=null",
+        # "env.observations.policy.height_scan=null",
         # "--headless",
     ]
     if args.device is not None:

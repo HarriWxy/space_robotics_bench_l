@@ -8,7 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from train_isaacbase_fpo import main as run_fpo
-
+import os 
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 def _has_option(argv: Sequence[str], *names: str) -> bool:
     return any(
@@ -23,7 +24,7 @@ def build_args(argv: Sequence[str] | None = None) -> list[str]:
         epilog="Other options are forwarded to train_isaacbase_fpo.py, including --device, --seed and --dry-run.",
     )
     parser.add_argument(
-        "--variant", choices=("joint_pg", "pmd", "pmd_tr", "joint_pmf"), default="pmd"  # required=True
+        "--variant", choices=("joint_pg", "pmd", "pmd_tr", "joint_pmf"), default="pmd_tr"  # required=True
     )
     selected, supplied = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
     if _has_option(supplied, "--pmf-next-step", "--pmf-ablation"):
@@ -40,7 +41,7 @@ def build_args(argv: Sequence[str] | None = None) -> list[str]:
             Path(__file__).resolve().parent / "hyperparams" / "pmf_next_step.yaml"
         ),
         "--task": "Isaac-Velocity-Flat-H1",
-        "--num-envs": "256",
+        "--num-envs": "1024",
         "--experiment-name": "h1_pmf_next_step",
         "--run-name": selected.variant,
         "--log-root": str(

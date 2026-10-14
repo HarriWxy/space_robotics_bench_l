@@ -1,7 +1,8 @@
 # Joint-latent FSPPO configuration for train_isaacbase_fsppo_joint.py.
 #
-# The wrapper injects two environments and two iterations for a small smoke
-# job.  Override --num-envs and --total-env-steps for a real experiment.
+# The wrapper defaults to 256 environments and derives its iteration budget
+# from --total-env-steps.  Pass --num-envs/--max-iterations for a bounded
+# smoke job.
 num_steps_per_env: 32
 max_iterations: 2
 empirical_normalization: false
@@ -38,9 +39,9 @@ policy:
   training_sampling_steps: 1
   # This public-action Gaussian makes the joint latent likelihood exact. The
   # algorithm can linearly anneal its std at rollout boundaries.
-  action_perturb_std: 0.1
+  action_perturb_std: 0.05
   pmf_logit_normal_mean: -0.4
-  pmf_logit_normal_std: 1.0
+  pmf_logit_normal_std: 1
   pmf_fm_proportion: 0.5
   # The default joint ratio needs only the h=1 map.  Retain the v-head target
   # so enabling fsppo_joint_aux_loss_coef later trains both pMF heads.
@@ -51,7 +52,7 @@ policy:
 
 algorithm:
   class_name: FSPPOJoint
-  num_learning_epochs: 8
+  num_learning_epochs: 4
   num_mini_batches: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -71,7 +72,7 @@ algorithm:
   normalize_advantage: true
   normalize_advantage_per_mini_batch: false
   advantage_clamp: [100.0, 100.0]
-  n_samples_per_action: 16
+  n_samples_per_action: 8
   cfm_diff_clamp_max: 10.0
   cfm_loss_clamp: 20.0
   cfm_loss_clamp_negative_advantages: true
@@ -83,6 +84,11 @@ algorithm:
   # Temporary no-budget ablation: no backtracking/rejection and no map-KL
   # penalty or dual update. Set true to restore the budgeted algorithm.
   fsppo_joint_enable_budget: false
+  # Budget-free map_kl is log-only; estimate it cheaply instead of running a
+  # full-batch, map-sample-wide (graphed) transport evaluation per minibatch.
+  fsppo_joint_cheap_map_diagnostics: true
+  # Full behavior-replay contract sweep once per 20 updates, not every update.
+  fsppo_joint_replay_check_interval: 20
   fsppo_joint_kl_coef: 1.0
   fsppo_joint_dual_lr: 0.1
   fsppo_joint_kl_coef_max: 1000.0
@@ -90,11 +96,16 @@ algorithm:
   fsppo_joint_probe_size: 1024
   fsppo_joint_max_backtracks: 5
   fsppo_joint_backtrack_factor: 0.5
-  fsppo_joint_aux_loss_coef: 1
+  fsppo_joint_aux_loss_coef: 0.1
+  fsppo_joint_adv_v_loss_coef: 0.0
   # Anneal the action-noise std from 0.05 to 0.01 over 80M global transitions.
-  action_perturb_std_final: 0.05
+  # This value is part of FSPPOJoint's sampling contract: changing it prevents
+  # --resume from checkpoints written with the old schedule (eval still works).
+  action_perturb_std_final: 0.01
   action_perturb_std_decay_env_steps: 80000000
-  # Resume saves online weights separately if EMA is enabled; keep the first
-  # joint baseline unambiguous and evaluate the same online map.
+  # Keep the first joint baseline unambiguous and evaluate the same online
+  # map: EMA is disabled so the saved model_state_dict is the online policy.
+  # Re-enable (e.g. 0.95) once the baseline is established; save() then bakes
+  # EMA weights into the evaluation artifact after ema_warmup_steps updates.
   ema_decay: 0.0
-  ema_warmup_steps: 0
+  ema_warmup_steps: 200

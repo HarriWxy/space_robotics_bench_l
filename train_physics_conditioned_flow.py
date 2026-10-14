@@ -87,7 +87,7 @@ def build_srb_argv(args: argparse.Namespace) -> list[str]:
         "env.robot=unitree_h1",
         f"env.num_envs={args.num_envs}",
         "env.sim.device=cuda",
-        "env.command_vis=false",
+        # "env.command_vis=false",
         "env.episode_length_s=30.0",
         "env.curriculum.enabled=false",
         "env.curriculum.fixed_stage=2",

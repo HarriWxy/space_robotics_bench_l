@@ -106,7 +106,7 @@ class LocomotionRewardCfg:
     foot_slip_weight: float = -0.25
     foot_slip_contact_force_threshold: float = 1.0
     foot_slip_max_penalty: float = -2.0
-    undesired_linear_velocity_z_weight: float = -2.0
+    undesired_linear_velocity_z_weight: float = 0
     undesired_angular_velocity_xy_weight: float = -0.05
     gravity_alignment_weight: float = -1.0
     termination_penalty: float = -200.0
@@ -134,11 +134,11 @@ class LocomotionTerminationCfg:
     # height/orientation checks disabled by default and retain them as opt-in
     # safety checks for other SRB legged assets.
     min_base_height: float = 0.0
-    min_body_up_z: float = -1.0
+    min_body_up_z: float = 0.1
     base_contact_force_threshold: float = 1.0
     tracking_linear_error_threshold: float = 0.5
     tracking_angular_error_threshold: float = 0.8
-    tracking_min_body_up_z: float = -1.0
+    tracking_min_body_up_z: float = 0.1
     success_min_duration_s: float = 20.0
     success_settle_time_s: float = 0.0
     success_tracking_fraction: float = 0.9
