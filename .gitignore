@@ -36,6 +36,8 @@ docs/index.html
 *.log
 logs/
 
+.agents
+
 # colcon / ROS build log root
 log/
 outputs/
