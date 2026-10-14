@@ -4,8 +4,70 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "jax"
+      - dependency-name: "jaxlib"
+      - dependency-name: "matplotlib"
+      - dependency-name: "scipy"
+      - dependency-name: "tensorboard"
+      - dependency-name: "tensorflow"
+      - dependency-name: "tf-keras"
+      - dependency-name: "torch"
+      - dependency-name: "torchvision"
+      - dependency-name: "tensordict"
+      - dependency-name: "torchrl"
+      - dependency-name: "skrl"
+      - dependency-name: "usd-core"
+      - dependency-name: "rsl-rl-lib"
+      - dependency-name: "oxidasim"
+      - dependency-name: "simforge"
+      - dependency-name: "simforge-foundry"
+      - dependency-name: "numpy"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "optuna"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "eframe"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "egui*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"

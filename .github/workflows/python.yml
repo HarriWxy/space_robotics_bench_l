@@ -2,10 +2,7 @@ name: Python
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - "docs/**"
+    branches: [main, dev]
   pull_request:
   release:
     types: [published]
@@ -13,41 +10,144 @@ on:
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
 
 jobs:
-  python:
-    runs-on: ubuntu-latest
-    env:
-      UV_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+  test:
+    name: Build & Test
+    if: ${{ github.event_name != 'release' || github.event.release.prerelease == false }}
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v5
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@90e01b21170618765a73370fcc3abbd1684a7793
         with:
-          enable-cache: true
+          remove-android: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-dotnet: "true"
+          remove-haskell: "true"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          enable-cache: ${{ github.event_name != 'release' }}
           cache-dependency-glob: "uv.lock"
+          prune-cache: true
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version-file: "pyproject.toml"
-      - name: Set up coverage
-        run: uv add pytest-cov
       - name: Install the project
-        run: uv sync --all-extras
-      # Note: Tests are disabled in CI because they require NVIDIA GPU
-      # - name: Run tests
-      #   run: uv run pytest tests -v
-      # - name: Generate coverage
-      #   run: uv run pytest --cov=./ --cov-report=xml
-      # - name: Upload coverage
-      #   uses: codecov/codecov-action@v5
-      #   with:
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-      #     files: ./coverage.xml
-      #     fail_ci_if_error: false
-      - name: Build
-        run: uv build
+        run: uv sync --locked --all-extras --group vcs-sources
+      - name: Run tests
+        run: uv run pytest -q tests/import_test.py
+      - name: Build wheel and smoke-test the packaged CLI
+        run: |
+          uv build --sdist --out-dir dist
+          sdist=(dist/*.tar.gz)
+          if (( ${#sdist[@]} != 1 )); then
+            echo "expected exactly one generated sdist, found ${#sdist[@]}"
+            exit 1
+          fi
+          uv build --wheel --out-dir dist "${sdist[0]}"
+          uv venv --clear --python "$(uv python find)" /tmp/srb-wheel-venv
+          uv pip install --python /tmp/srb-wheel-venv/bin/python dist/*.whl
+          cd /tmp
+          /tmp/srb-wheel-venv/bin/python -c "import pathlib, srb, srb.cli, srb.cli.registry; \
+            origin = pathlib.Path(srb.__file__).resolve(); \
+            assert origin.is_relative_to('/tmp/srb-wheel-venv'), f'imported {origin}, not the installed wheel'; \
+            print(origin)"
+          /tmp/srb-wheel-venv/bin/python -c "from pathlib import Path; from srb.utils.path import SRB_APPS_DIR, SRB_HYPERPARAMS_DIR; assert (SRB_APPS_DIR / 'srb.headless.kit').is_file(); assert (SRB_HYPERPARAMS_DIR / 'tdmpc2.yaml').is_file(); print(SRB_APPS_DIR, SRB_HYPERPARAMS_DIR)"
+          if output="$(/tmp/srb-wheel-venv/bin/python -c "from srb.cli.preflight import validate_kit_path; validate_kit_path(headless=True, enable_cameras=False, xr=False)" 2>&1)"; then
+            echo "wheel simulator preflight unexpectedly passed"
+            exit 1
+          else
+            printf '%s\n' "$output"
+            grep -Fq "Simulator resources are unavailable" <<<"$output"
+          fi
+          /tmp/srb-wheel-venv/bin/srb --help
+          /tmp/srb-wheel-venv/bin/python - <<'PY'
+          import json
+          from importlib import resources
+
+          from srb.terrain.landscaping_contract import (
+              load_crater_target_manifest,
+              verify_target_manifest,
+          )
+
+          resource = resources.files("srb").joinpath(
+              "tasks/mobile/terrain_landscaping/crater_target_manifest.json"
+          )
+          payload = json.loads(resource.read_text(encoding="utf-8"))
+          expected = "08e66df639fc6d561bb02657c29e707617582ff4f51cd4454902c709f1ec6f17"
+          assert payload["manifest_sha256"] == expected
+          manifest = load_crater_target_manifest()
+          assert manifest.manifest_sha256 == expected
+          verify_target_manifest(manifest)
+          print("wheel manifest resource/hash OK", resource)
+          PY
+      - name: Upload release distributions
+        if: ${{ github.event_name == 'release' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    if: ${{ github.event_name == 'release' && github.event.release.prerelease == false && github.repository == 'AndrejOrsula/space_robotics_bench' }}
+    needs: [test]
+    runs-on: ubuntu-26.04
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          enable-cache: false
+      - name: Download release distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: python-dist
+          path: dist/
+      - name: Verify release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          with open("pyproject.toml", "rb") as project_file:
+              project_version = tomllib.load(project_file)["project"]["version"]
+          release_tag = os.environ["RELEASE_TAG"]
+          if release_tag != project_version:
+              print(
+                  f"::error::Release tag {release_tag!r} does not match "
+                  f"project version {project_version!r}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY
       - name: Publish
-        if: ${{ github.event_name == 'release' && env.UV_PYPI_TOKEN != '' }}
-        run: uv publish -t ${{ env.UV_PYPI_TOKEN }}
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [ -n "${PYPI_TOKEN}" ]; then
+            UV_PUBLISH_TOKEN="${PYPI_TOKEN}" uv publish dist/*
+          else
+            uv publish --trusted-publishing always dist/*
+          fi

@@ -2,10 +2,8 @@ name: Docker
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - "docs/**"
+    branches: [main, dev]
+    paths-ignore: ["docs/**"]
   pull_request:
   release:
     types: [published]
@@ -13,81 +11,83 @@ on:
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
 
 jobs:
   docker:
+    name: Build & Publish Image
+    if: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'release' || github.event.release.prerelease == false) }}
+    runs-on: [self-hosted, Linux, X64]
     permissions:
-      packages: write
       contents: read
-    runs-on: ubuntu-latest
-    if: ${{ github.actor != 'dependabot[bot]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        dockerfile:
-          - Dockerfile
+      packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      PUBLISH: ${{ github.event_name == 'release' && github.repository == 'AndrejOrsula/space_robotics_bench' }}
     steps:
-      ## Free up space by removing unnecessary files
-      - name: Maximize build space
-        uses: AdityaGarg8/remove-unwanted-software@v5
+      - name: Reclaim workspace ownership
+        run: sudo --non-interactive chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+      - name: Check free disk space
+        run: |
+          avail_gb() { df --output=avail -BG "${GITHUB_WORKSPACE}" | tail -1 | tr -dc '0-9'; }
+          if [ "$(avail_gb)" -lt 100 ]; then
+            docker image prune --force
+            docker builder prune --force --filter until=168h
+          fi
+          echo "Free disk space: $(avail_gb) GB"
+          if [ "$(avail_gb)" -lt 100 ]; then
+            echo "::error::The Docker build needs at least 100 GB of free disk space."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          remove-android: "true"
-          remove-cached-tools: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          remove-dotnet: "true"
-          remove-haskell: "true"
-          remove-large-packages: "true"
-
-      - uses: actions/checkout@v5
-        with:
+          persist-credentials: false
           submodules: recursive
-
-      ## Login to Docker Hub and/or GitHub container registry
-      - name: Login to GitHub container registry
-        if: ${{ github.event_name == 'release' }}
-        uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry
+        if: ${{ env.PUBLISH == 'true' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to Docker Hub
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
-        if: ${{ github.event_name == 'release' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_PASSWORD != '' }}
-        id: login-dockerhub
-        uses: docker/login-action@v3
+      - name: Log in to Docker Hub
+        id: dockerhub
+        if: ${{ env.PUBLISH == 'true' && env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Login to NGC
-        env:
-          NVCR_USERNAME: ${{ secrets.NVCR_USERNAME }}
-          NVCR_PASSWORD: ${{ secrets.NVCR_PASSWORD }}
-        if: ${{ env.NVCR_USERNAME != '' && env.NVCR_PASSWORD != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: nvcr.io
-          username: ${{ secrets.NVCR_USERNAME }}
-          password: ${{ secrets.NVCR_PASSWORD }}
-
-      ## Extract metadata (tags, labels) from Git reference and GitHub events for the Docker image
       - name: Extract metadata
         id: metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: |
-            name=ghcr.io/${{ github.repository }},enable=true
-            name=${{ github.repository }},enable=${{ steps.login-dockerhub.outcome == 'success' }}
-
-      ## Build and push if the workflow was triggered by a release
-      - name: Build (and push on release)
-        uses: docker/build-push-action@v6
+            ghcr.io/${{ github.repository }}
+            name=${{ github.repository }},enable=${{ steps.dockerhub.outcome == 'success' }}
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'release' && matrix.dockerfile == 'Dockerfile' }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+      - name: Smoke test
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: docker run --rm --entrypoint bash "${IMAGE_ID}" -lc 'srb --help'
+      - name: Push
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          TAGS: ${{ steps.metadata.outputs.tags }}
+        run: |
+          for tag in ${TAGS}; do
+            docker push "${tag}"
+          done
+      - name: Remove image
+        if: ${{ always() && steps.build.outputs.imageid != '' }}
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: docker image rm --force "${IMAGE_ID}"
