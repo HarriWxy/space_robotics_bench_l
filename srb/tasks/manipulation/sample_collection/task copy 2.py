@@ -2,6 +2,11 @@ from dataclasses import MISSING
 from typing import Sequence, Tuple
 
 import torch
+from isaaclab.utils.math import (
+    matrix_from_quat,
+    scale_transform,
+    subtract_frame_transforms,
+)
 
 from srb._typing import StepReturn
 from srb.core.asset import (
@@ -24,12 +29,7 @@ from srb.core.mdp import reset_root_state_uniform
 from srb.core.sensor import ContactSensorCfg
 from srb.core.sim import PreviewSurfaceCfg, SphereCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import (
-    matrix_from_quat,
-    rotmat_to_rot6d,
-    scale_transform,
-    subtract_frame_transforms,
-)
+from srb.utils.math import rotmat_to_rot6d
 
 from .asset import select_sample
 
@@ -152,7 +152,7 @@ class Task(ManipulationEnv):
         self._robot.data.joint_vel.torch[env_ids] = 0.0
 
     def extract_step_return(self) -> StepReturn:
-        return _compute_step_return(
+        step_return = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -201,6 +201,7 @@ class Task(ManipulationEnv):
             if self._contacts_end_effector is not None
             else None,
         )
+        return StepReturn.from_tuple(step_return)
 
     # def _is_gripper_closed(self) -> torch.Tensor:
     #     """返回夹爪是否闭合的布尔张量（基于关节位置或动作）"""
@@ -280,7 +281,9 @@ def _compute_step_return(
     contact_forces_robot: torch.Tensor,
     contact_forces_end_effector: torch.Tensor | None,
     contact_force_matrix_end_effector: torch.Tensor | None,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]], dict[str, torch.Tensor], torch.Tensor, torch.Tensor
+]:
     num_envs = episode_length.size(0)
     dtype = episode_length.dtype
     device = episode_length.device
@@ -524,7 +527,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,

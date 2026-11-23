@@ -2,6 +2,7 @@ from dataclasses import MISSING
 from typing import List, Sequence
 
 import torch
+from isaaclab.utils.math import matrix_from_quat, scale_transform
 
 from srb import assets
 from srb._typing import StepReturn
@@ -14,12 +15,7 @@ from srb.core.mdp import (
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.core.sim import CollisionPropertiesCfg, RigidBodyPropertiesCfg, UsdFileCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import (
-    matrix_from_quat,
-    rotmat_to_rot6d,
-    scale_transform,
-    subtract_frame_transforms,
-)
+from srb.utils.math import rotmat_to_rot6d
 from srb.utils.nucleus import ISAACLAB_NUCLEUS_DIR
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
@@ -78,6 +74,8 @@ class ObstacleCrossingTaskCfg(TaskCfg):
 
     ## Time
     env_rate: float = 1.0 / 125.0
+    # Preserve the two physics steps per action used before strict timing validation.
+    agent_rate: float = 2.0 * env_rate
 
 
 ############
@@ -113,7 +111,7 @@ class ObstacleCrossingTask(Task):
         _robot_pose = self._robot.data.root_link_pose_w.torch
         
         # Compute reward and termination logic here (simplified for template)
-        return _compute_step_return(
+        step_data = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -133,6 +131,9 @@ class ObstacleCrossingTask(Task):
             contact_forces_robot=self._contacts_robot.data.net_normal_forces_w.torch,  # type: ignore
             contact_robot=self._contacts_robot.compute_first_contact(self.step_dt),
         )
+
+        return StepReturn.from_tuple(step_data)
+
 
 @torch.jit.script
 def _compute_step_return(
@@ -167,7 +168,12 @@ def _compute_step_return(
     robot_undesired_contact_body_indices: List[int],
     ## Command
     command: torch.Tensor,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]],
+    dict[str, torch.Tensor],
+    torch.Tensor,
+    torch.Tensor,
+]:
     num_envs = episode_length.size(0)
     device = episode_length.device
 
@@ -291,7 +297,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,

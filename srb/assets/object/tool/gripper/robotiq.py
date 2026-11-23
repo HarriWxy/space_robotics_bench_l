@@ -34,9 +34,7 @@ class RobotiqHandE(ActiveTool):
             # Dynamic links in ``robotiq_hand_e.usdz`` use triangle meshes,
             # which PhysX cannot use. Set the convex hull fallback explicitly
             # to avoid load-time recovery errors while preserving that shape.
-            mesh_collision_props=MeshCollisionPropertiesCfg(
-                mesh_approximation="convexHull"
-            ),
+            # mesh_collision_props=MeshCollisionPropertiesCfg(mesh_approximation="convexHull"),
             rigid_props=RigidBodyPropertiesCfg(
                 disable_gravity=True,
                 max_depenetration_velocity=5.0,

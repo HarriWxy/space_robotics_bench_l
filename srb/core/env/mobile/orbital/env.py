@@ -1,12 +1,12 @@
 from dataclasses import MISSING
 
 import torch
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 from srb.core.action import ThrustAction
 from srb.core.asset import AssetVariant, ExtravehicularScenery, OrbitalRobot
 from srb.core.default_assets import get_default_asset_factories
 from srb.core.domain import Domain
-from srb.core.env import KitVisualizerCfg
 from srb.core.env.mobile.env import (
     MobileEnv,
     MobileEnvCfg,

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np  # noqa: F401
 import torch
 import torch.nn.functional as F
+from isaaclab.sim.utils import find_matching_prims
 from pxr import Gf, PhysxSchema, Usd, UsdPhysics
 
 from srb.core.asset import (  # DeformableObject,
@@ -39,6 +40,7 @@ from srb.core.scene_introspection import (
     replace_scene_extra,
 )
 from srb.core.sim.prim_utils import get_current_stage
+from srb.core.static_asset_view import static_asset_prim_path
 from srb.utils.math import quat_from_angle_axis, quat_from_euler_xyz, quat_mul, slerp
 from srb.utils.poisson_disk import sample_poisson_disk
 from srb.utils.sampling import sample_uniform
@@ -82,36 +84,6 @@ from .ephemeris_events import (
 
 if TYPE_CHECKING:
     from srb._typing import AnyEnv
-
-
-def _frame_view_indices(
-    view: FrameView,
-    env: "AnyEnv",
-    env_ids: torch.Tensor | None,
-) -> torch.Tensor | None:
-    """Use per-environment indices only when a frame view has one prim per environment."""
-    if env_ids is None or view.count != env.scene.num_envs:
-        return None
-    return env_ids
-
-
-def _set_frame_view_world_poses(
-    view: FrameView,
-    *,
-    positions: torch.Tensor | None = None,
-    orientations: torch.Tensor | None = None,
-    env: "AnyEnv",
-    env_ids: torch.Tensor | None = None,
-) -> None:
-    """Write FrameView poses through Warp for both PhysX and Newton backends."""
-    indices = _frame_view_indices(view, env, env_ids)
-    view.set_world_poses(
-        positions=None if positions is None else wp.from_torch(positions.contiguous()),
-        orientations=None if orientations is None else wp.from_torch(orientations.contiguous()),
-        indices=None
-        if indices is None
-        else wp.from_torch(indices.to(dtype=torch.int32).contiguous()),
-    )
 
 
 def _xform_view_count(asset: Any) -> int:
@@ -204,20 +176,14 @@ def reset_articulations_default(env: "AnyEnv", env_ids: torch.Tensor | None):
         )
         default_joint_pos = articulation_asset.data.default_joint_pos[state_ids].clone()
         default_joint_vel = articulation_asset.data.default_joint_vel[state_ids].clone()
-        articulation_asset.write_joint_state_to_sim(
-            default_joint_pos,
-            default_joint_vel,
+        articulation_asset.write_joint_position_to_sim_index(
+            position=default_joint_pos,
             env_ids=env_ids,  # type: ignore[misc]
         )
         articulation_asset.write_joint_velocity_to_sim_index(
-            velocity = default_joint_vel,
-            env_ids=env_ids,  # type: ignore
+            velocity=default_joint_vel,
+            env_ids=env_ids,  # type: ignore[misc]
         )
-        # articulation_asset.write_joint_state_to_sim(
-        #     default_joint_pos,
-        #     default_joint_vel,
-        #     env_ids=env_ids,  # type: ignore
-        # )
 
 
 def reset_deformable_objects_default(env: "AnyEnv", env_ids: torch.Tensor | None):
@@ -607,6 +573,16 @@ def randomize_usd_prim_attribute_uniform(
     asset_cfg: SceneEntityCfg,
 ):
     asset: Any = get_scene_entity(env.scene, asset_cfg.name)
+    prims = getattr(asset, "prims", None)
+    if prims is None:
+        prim_path = static_asset_prim_path(asset)
+        if prim_path is None:
+            raise TypeError(
+                f"Scene entity '{asset_cfg.name}' does not expose prims or a prim_path."
+            )
+        prims = find_matching_prims(prim_path)
+    per_env_prims = len(prims) == env.scene.num_envs
+    env_id_set = set(env_ids.tolist()) if per_env_prims and env_ids is not None else None
     if isinstance(distribution_params[0], Sequence):
         dist_len = len(distribution_params[0])
         distribution_params = (  # type: ignore[misc]
@@ -616,7 +592,7 @@ def randomize_usd_prim_attribute_uniform(
     else:
         dist_len = 1
     for i, prim in enumerate(prims):
-        if per_env_prims and env_id_set is not None and i not in env_id_set:
+        if env_id_set is not None and i not in env_id_set:
             continue
         value = sample_uniform(
             distribution_params[0],  # type: ignore[misc]
@@ -715,27 +691,69 @@ def progress_sun_ephemeris(
     )
 
 
+def _set_global_gravity(
+    env: "AnyEnv", gravity_direction: Gf.Vec3f, gravity_magnitude: float
+) -> None:
+    # Resolve the physics scene from the stage; SimulationContext does not cache it.
+    physics_scene = UsdPhysics.Scene.Get(env.sim.stage, env.sim.cfg.physics_prim_path)
+    physics_scene.CreateGravityDirectionAttr().Set(gravity_direction)
+    physics_scene.CreateGravityMagnitudeAttr().Set(gravity_magnitude)
+
+    task = getattr(env, "unwrapped", env)
+    if not getattr(task, "_tracks_gravity_magnitude", False):
+        return
+    task._gravity_magnitude_scalar = gravity_magnitude
+    gravity_buffer = getattr(task, "_gravity_magnitude", None)
+    if isinstance(gravity_buffer, torch.Tensor):
+        gravity_buffer.fill_(gravity_magnitude)
+    elif hasattr(task, "num_envs") and hasattr(task, "device"):
+        task._gravity_magnitude = torch.full(
+            (task.num_envs,), gravity_magnitude, dtype=torch.float32, device=task.device
+        )
+
+
 def randomize_gravity_uniform(
     env: "AnyEnv",
     env_ids: torch.Tensor | None,
     distribution_params: tuple[tuple[float, float, float], tuple[float, float, float]],
-):
-    # Resolve the physics scene from the stage; SimulationContext does not cache it.
-    physics_scene = UsdPhysics.Scene.Get(env.sim.stage, env.sim.cfg.physics_prim_path)
+) -> None:
+    del env_ids
     gravity = sample_uniform(
         torch.tensor(distribution_params[0]),
         torch.tensor(distribution_params[1]),
         (3,),
         device="cpu",
     )
-    gravity_magnitude = torch.norm(gravity)
+    gravity_magnitude = torch.linalg.vector_norm(gravity).item()
     if gravity_magnitude == 0.0:
-        gravity_direction = torch.tensor([0.0, 0.0, -1.0], device=gravity.device)
+        gravity_direction = Gf.Vec3f(0.0, 0.0, -1.0)
     else:
-        gravity_direction = gravity / gravity_magnitude
+        gravity_direction = Gf.Vec3f(*(gravity / gravity_magnitude).tolist())
+    _set_global_gravity(env, gravity_direction, gravity_magnitude)
 
-    physics_scene.CreateGravityDirectionAttr(Gf.Vec3f(*gravity_direction.tolist()))
-    physics_scene.CreateGravityMagnitudeAttr(gravity_magnitude.item())
+
+def randomize_gravity_stratified(
+    env: "AnyEnv",
+    env_ids: torch.Tensor | None,
+    distribution_params: tuple[tuple[float, float, float], tuple[float, float, float]],
+    num_buckets: int,
+) -> None:
+    """Sample one scene-wide gravity magnitude from the next bucket in the cycle."""
+    del env_ids
+    if num_buckets < 2:
+        raise ValueError("num_buckets must be at least 2")
+
+    gravity_min, gravity_max = sorted(
+        abs(float(bound[2])) for bound in distribution_params
+    )
+    task = getattr(env, "unwrapped", env)
+    bucket_index = int(getattr(task, "_gravity_bucket_index", 0)) % num_buckets
+    bucket_width = (gravity_max - gravity_min) / num_buckets
+    lower = gravity_min + bucket_index * bucket_width
+    upper = gravity_max if bucket_index == num_buckets - 1 else lower + bucket_width
+    gravity_magnitude = sample_uniform(lower, upper, (1,), device="cpu").item()
+    _set_global_gravity(env, Gf.Vec3f(0.0, 0.0, -1.0), gravity_magnitude)
+    task._gravity_bucket_index = bucket_index + 1
 
 
 def randomize_external_force_torque_bernoulli(

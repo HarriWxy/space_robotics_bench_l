@@ -7,6 +7,7 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 
 from srb.hydra.common import (
+    hydra_version_base_kwargs,
     replace_enums_with_strings,
     replace_strings_with_enums,
 )
@@ -55,7 +56,7 @@ def hydra_task_config(
                 config_name=task_name.rsplit("/", 1)[1]
                 if config_path is None
                 else config_path.stem,
-                version_base=None,
+                **hydra_version_base_kwargs(),
             )
             def hydra_main(hydra_env_cfg: DictConfig, agent_cfg=agent_cfg):
                 # Convert to a native dictionary

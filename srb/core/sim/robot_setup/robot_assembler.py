@@ -14,15 +14,27 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdUtils
 from srb.core.sim.prim_utils import (
     create_prim,
     find_unique_string_name,
-    get_articulation_root_api_prim_path,
     get_current_stage,
     get_prim_at_path,
-    is_prim_path_valid,
     move_articulation_root,
 )
 
 from .assembled_bodies import AssembledBodies
 from .cfg import RobotAssemblerCfg
+
+
+def _find_articulation_root(prim: Usd.Prim) -> Usd.Prim:
+    """Find the first articulation root in an assembled asset subtree."""
+    if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+        return prim
+    return next(
+        (
+            candidate
+            for candidate in Usd.PrimRange(prim)
+            if candidate.HasAPI(UsdPhysics.ArticulationRootAPI)
+        ),
+        prim,
+    )
 
 
 def prepare_assembled_scene_physics(stage: Usd.Stage) -> Callable[[], None]:
@@ -80,7 +92,7 @@ class RobotAssembler(__RobotAssembler):
             base_mount_path = (
                 f"{cfg.base_path}/{cfg.attach_path.split('/')[-1]}_mount_frame"
             )
-            stage = sim_utils.get_current_stage()
+            stage = get_current_stage()
             base_mount_path = find_unique_string_name(
                 base_mount_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
             )
@@ -94,14 +106,14 @@ class RobotAssembler(__RobotAssembler):
             attach_mount_path = (
                 f"{cfg.attach_path}/{cfg.base_path.split('/')[-1]}_mount_frame"
             )
-            stage = sim_utils.get_current_stage()
+            stage = get_current_stage()
             attach_mount_path = find_unique_string_name(
                 attach_mount_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
             )
             create_prim(attach_mount_path, "Xform", translation=(0.0, 0.0, 0.0))
 
         # Get the prim and articulation root of the attached asset
-        stage = sim_utils.get_current_stage()
+        stage = get_current_stage()
         attach_prim = stage.GetPrimAtPath(cfg.attach_path)
         articulation_root = _find_articulation_root(attach_prim)
 
@@ -204,7 +216,6 @@ class RobotAssembler(__RobotAssembler):
         stage = get_current_stage()
 
         fixed_joint_path = prim_path + "/AssemblerFixedJoint"
-        stage = sim_utils.get_current_stage()
         fixed_joint_path = find_unique_string_name(
             fixed_joint_path, lambda x: not stage.GetPrimAtPath(x).IsValid()
         )

@@ -1,6 +1,7 @@
 from typing import Sequence
 
 import torch
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 from srb import assets
 from srb._typing import ObservationGroup, StepReturn
@@ -12,7 +13,6 @@ from srb.core.asset import (
     OrbitalRobot,
 )
 from srb.core.env import (
-    KitVisualizerCfg,
     OrbitalEnv,
     OrbitalEnvCfg,
     OrbitalEventCfg,
@@ -193,7 +193,7 @@ class TaskCfg(OrbitalEnvCfg):
         },
     )
 
-    viewer: ViewerCfg = ViewerCfg(
+    visualizer: KitVisualizerCfg = KitVisualizerCfg(
         eye=(3.0, -3.0, 3.0),
         lookat=(0.0, 0.0, 0.0),
         origin_type="asset",

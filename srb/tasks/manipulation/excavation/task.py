@@ -14,7 +14,6 @@ from srb.assets.object.tool.scoop import ScoopCustom3
 from srb.assets.robot.manipulation.kinova import KinovaGen3n7
 from srb.assets.robot.mobile.ground.husky import Husky
 from srb.core.env import (
-    KitVisualizerCfg,
     ManipulationEnv,
     ManipulationEnvCfg,
     ManipulationEventCfg,

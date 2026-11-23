@@ -4,6 +4,7 @@ from math import ceil, isfinite
 from typing import Literal
 
 import torch
+from isaaclab.utils.math import matrix_from_quat, scale_transform
 
 from srb import assets
 from srb._typing import StepReturn
@@ -17,7 +18,7 @@ from srb.core.mdp import (
 )
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d, scale_transform
+from srb.utils.math import rotmat_to_rot6d
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
 
@@ -832,7 +833,7 @@ class LocomotionTask(Task):
             neginf=0.0,
         )
 
-        step_return = _compute_step_return(
+        step_values = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -897,6 +898,7 @@ class LocomotionTask(Task):
             min_base_height=self.cfg.terminations.min_base_height,
             min_body_up_z=self.cfg.terminations.min_body_up_z,
         )
+        step_return = StepReturn.from_tuple(step_values)
 
         if (
             self.cfg.include_gravity_magnitude
@@ -1043,7 +1045,9 @@ def _compute_step_return(
     ## Terminations
     min_base_height: float,
     min_body_up_z: float,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]], dict[str, torch.Tensor], torch.Tensor, torch.Tensor
+]:
     num_envs = episode_length.size(0)
     device = episode_length.device
 
@@ -1166,7 +1170,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,

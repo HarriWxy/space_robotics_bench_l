@@ -93,10 +93,10 @@ class ManipulationEnvCfg(DirectEnvCfg):
     env_rate: float = 1.0 / 150.0
     agent_rate: float = 1.0 / 50.0
 
-    ## Viewer
-    visualizer: KitVisualizerCfg = KitVisualizerCfg(
-        eye=(1.85, 0.0, 1.85), lookat=(0.125, 0.0, 0.25), origin_type="env"
-    )
+    # ## Viewer
+    # visualizer: KitVisualizerCfg = KitVisualizerCfg(
+    #     eye=(1.85, 0.0, 1.85), lookat=(0.125, 0.0, 0.25), origin_type="env"
+    # )
 
     def __post_init__(self):
         self._strip_pedestal_sensor_cfgs()

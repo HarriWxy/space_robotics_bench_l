@@ -1,5 +1,7 @@
 from dataclasses import MISSING
 
+from isaaclab import cloner
+
 from srb.core.asset import (
     ArticulationCfg,
     AssetBaseCfg,
@@ -14,6 +16,7 @@ from srb.utils.cfg import configclass
 class BaseSceneCfg(InteractiveSceneCfg):
     num_envs: int = 1
     replicate_physics: bool = False
+    clone_cfg: cloner.CloneCfg = cloner.CloneCfg(clone_strategy=cloner.random)
 
     ## Illumination
     sunlight: AssetBaseCfg | None = None
@@ -27,6 +30,3 @@ class BaseSceneCfg(InteractiveSceneCfg):
     payload: AssetBaseCfg | None = None
     manipulator: ArticulationCfg | None = None
     end_effector: AssetBaseCfg | None = None
-    clone_cfg: CloneCfg = CloneCfg(
-        clone_strategy=cloner.random,
-    )

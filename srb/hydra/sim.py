@@ -383,6 +383,7 @@ def hydra_task_config(
 
             from srb.hydra.common import (
                 extract_cfg_section,
+                hydra_version_base_kwargs,
                 replace_strings_with_enums,
                 validate_cfg_schema,
             )
@@ -414,7 +415,7 @@ def hydra_task_config(
                 config_name=task_name.rsplit("/", 1)[1]
                 if config_path is None
                 else config_path.stem,
-                version_base=None,
+                **hydra_version_base_kwargs(),
             )
             def hydra_main(
                 hydra_cfg: DictConfig,

@@ -9,6 +9,7 @@ from dataclasses import MISSING
 from typing import Sequence, Tuple
 
 import torch
+from isaaclab.utils.math import matrix_from_quat
 
 from srb import assets
 from srb._typing import StepReturn
@@ -21,7 +22,7 @@ from srb.core.mdp import (
     reset_collection_root_state_uniform_poisson_disk_2d,
 )
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d
+from srb.utils.math import rotmat_to_rot6d
 
 from .asset import select_obstacle
 
@@ -119,7 +120,7 @@ class Task(GroundEnv):
         super()._reset_idx(env_ids)
 
     def extract_step_return(self) -> StepReturn:
-        return _compute_step_return(
+        step_data = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -141,6 +142,7 @@ class Task(GroundEnv):
             ## Command
             command=self._command,
         )
+        return StepReturn.from_tuple(step_data)
 
 
 @torch.jit.script
@@ -166,7 +168,12 @@ def _compute_step_return(
     imu_ang_vel: torch.Tensor,
     ## Command
     command: torch.Tensor,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]],
+    dict[str, torch.Tensor],
+    torch.Tensor,
+    torch.Tensor,
+]:
     num_envs = episode_length.size(0)
     device = episode_length.device
 
@@ -249,7 +256,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "tf_rot6d_robot": tf_rot6d_robot,

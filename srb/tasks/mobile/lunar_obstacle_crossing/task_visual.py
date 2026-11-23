@@ -1,67 +1,47 @@
 """Visual variants of the lunar obstacle crossing task."""
 
-from typing import Dict, Sequence
+from typing import Literal
 
-import torch
-
-from srb.core.env import GroundEnvVisualExtCfg, VisualExt
+from srb.core.sensor.category import SensorCategory
 from srb.utils.cfg import configclass
 
 from .task import Task, TaskCfg
 from .task_locomotion import LocomotionTask, LocomotionTaskCfg
 
 
+_VISUAL_SENSOR_CATEGORIES = (
+    SensorCategory.PROPRIOCEPTION,
+    SensorCategory.CONTACT,
+    SensorCategory.TRANSFORM,
+    SensorCategory.VISUAL,
+)
+
+
 @configclass
-class VisualTaskCfg(GroundEnvVisualExtCfg, TaskCfg):
-    ## Visualization
+class VisualTaskCfg(TaskCfg):
+    active_sensors: set[SensorCategory] = set(_VISUAL_SENSOR_CATEGORIES)
+    camera_clipping_range: tuple[float, float] | None = (0.05, 25.05)
+    stack: bool = False
+    skydome: Literal["low_res", "high_res"] | bool | None = True
+    debug_vis: bool = False
     command_vis: bool = False
 
-    def __post_init__(self):
-        TaskCfg.__post_init__(self)
-        GroundEnvVisualExtCfg.wrap(self, env_cfg=self)  # type: ignore
 
-
-class VisualTask(VisualExt, Task):
+class VisualTask(Task):
     cfg: VisualTaskCfg
 
-    def __init__(self, cfg: VisualTaskCfg, **kwargs):
-        Task.__init__(self, cfg, **kwargs)
-        VisualExt.__init__(self, cfg, **kwargs)
-
-    def _reset_idx(self, env_ids: Sequence[int]):
-        Task._reset_idx(self, env_ids)
-        VisualExt._reset_idx(self, env_ids)
-
-    def _get_observations(self) -> Dict[str, torch.Tensor]:
-        return {
-            **Task._get_observations(self),
-            **VisualExt._get_observations(self),
-        }
-
 
 @configclass
-class VisualLocomotionTaskCfg(GroundEnvVisualExtCfg, LocomotionTaskCfg):
-    ## Visualization
+class VisualLocomotionTaskCfg(LocomotionTaskCfg):
+    active_sensors: set[SensorCategory] = set(_VISUAL_SENSOR_CATEGORIES)
+    camera_clipping_range: tuple[float, float] | None = (0.05, 25.05)
+    # Keep the legacy camera period independent of the corrected action period.
+    camera_update_period: float = 1.0 / 50.0
+    stack: bool = False
+    skydome: Literal["low_res", "high_res"] | bool | None = True
+    debug_vis: bool = False
     command_vis: bool = False
 
-    def __post_init__(self):
-        LocomotionTaskCfg.__post_init__(self)
-        GroundEnvVisualExtCfg.wrap(self, env_cfg=self)  # type: ignore
 
-
-class VisualLocomotionTask(VisualExt, LocomotionTask):
+class VisualLocomotionTask(LocomotionTask):
     cfg: VisualLocomotionTaskCfg
-
-    def __init__(self, cfg: VisualLocomotionTaskCfg, **kwargs):
-        LocomotionTask.__init__(self, cfg, **kwargs)
-        VisualExt.__init__(self, cfg, **kwargs)
-
-    def _reset_idx(self, env_ids: Sequence[int]):
-        Task._reset_idx(self, env_ids)
-        VisualExt._reset_idx(self, env_ids)
-
-    def _get_observations(self) -> Dict[str, torch.Tensor]:
-        return {
-            **LocomotionTask._get_observations(self),
-            **VisualExt._get_observations(self),
-        }

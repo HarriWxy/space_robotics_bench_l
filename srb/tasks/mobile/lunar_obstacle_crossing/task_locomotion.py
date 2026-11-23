@@ -9,6 +9,7 @@ from dataclasses import MISSING
 from typing import List, Sequence
 
 import torch
+from isaaclab.utils.math import matrix_from_quat, scale_transform
 
 from srb import assets
 from srb._typing import StepReturn
@@ -17,11 +18,7 @@ from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.mdp import randomize_command, reset_joints_by_scale
 from srb.core.sensor import ContactSensor, ContactSensorCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import (
-    matrix_from_quat,
-    rotmat_to_rot6d,
-    scale_transform,
-)
+from srb.utils.math import rotmat_to_rot6d
 
 from .task import EventCfg, SceneCfg, Task, TaskCfg
 
@@ -73,6 +70,8 @@ class LocomotionTaskCfg(TaskCfg):
 
     ## Time
     env_rate: float = 1.0 / 125.0
+    # Preserve the two physics steps per action used before strict timing validation.
+    agent_rate: float = 2.0 * env_rate
 
     def __post_init__(self):
         super().__post_init__()
@@ -111,7 +110,7 @@ class LocomotionTask(Task):
         if self.cfg.command_vis or self.cfg.debug_vis:
             self._update_visualization_markers()
 
-        return _compute_step_return(
+        step_data = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -150,6 +149,7 @@ class LocomotionTask(Task):
             ## Command
             command=self._command,
         )
+        return StepReturn.from_tuple(step_data)
 
 
 @torch.jit.script
@@ -188,7 +188,12 @@ def _compute_step_return(
     robot_undesired_contact_body_indices: List[int],
     ## Command
     command: torch.Tensor,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]],
+    dict[str, torch.Tensor],
+    torch.Tensor,
+    torch.Tensor,
+]:
     num_envs = episode_length.size(0)
     device = episode_length.device
 
@@ -333,7 +338,7 @@ def _compute_step_return(
         else torch.zeros(num_envs, dtype=torch.bool, device=device)
     )
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "contact_forces_mean_robot": contact_forces_mean_robot,

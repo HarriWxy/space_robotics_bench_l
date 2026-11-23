@@ -217,7 +217,7 @@ class _TaskMixin:
             if torch.all(torch.isfinite(joint_pos_limits_robot))
             else joint_pos_robot
         )
-        if isinstance(self._end_effector, Articulation):
+        if isinstance(self._end_effector, BaseArticulation):
             joint_pos_ee = self._end_effector.data.joint_pos
             ee_limits = self._end_effector.data.soft_joint_pos_limits
             joint_pos_end_effector_normalized = (

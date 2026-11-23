@@ -4,6 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 override-dependencies = ["diffusers>=0.31,<0.32"]
+no-build-isolation-package = ["idna-ssl"]
 ## Match the compiled packages bundled with Isaac Sim 6.1
 constraint-dependencies = ["matplotlib==3.10.8", "scipy==1.17.0"]
 extra-build-variables = { egl-probe = { CMAKE_POLICY_VERSION_MINIMUM = "3.5" } }
@@ -173,9 +174,6 @@ dependencies = [
   "oxidasim==0.1.0",
   ## Assets
   # "simforge[assets]==0.4.0.1",
-  "gymnasium~=1.2",
-  "oxidasim==0.1.0",
-  ## Assets
   "simforge[assets]==0.4.0",
   ## Terrain pipeline
   "rasterio>=1.3,<2.0",
@@ -188,8 +186,6 @@ dependencies = [
   "usd-core>=24.0,<27.0",
   "pyyaml~=6.0",
   "requests>=2.31,<3.0",
-  "numpy>=1.26,<3.0",
-  "scipy>=1.10,<2.0",
   ## Typing
   "pydantic",
   ## Serialization
@@ -201,7 +197,6 @@ dependencies = [
   "torchvision==0.26.0+cu128",
   # Isaac Sim is installed separately when using the native/Omniverse setup.
   # "isaacsim[all,extscache]==6.1.0.0",
-  "orjson~=3.10",
   ## Process resource accounting
   "psutil>=5.9,<8.0",
   "setproctitle>=1.3,<2",
@@ -238,31 +233,6 @@ algo = [
   "srb[skrl]",
   # "srb[robomimic]",
 ]
-dreamer = [
-  #
-  # Note: Only editable install of dreamer works for now (circular import of  partially initialized module included with sys.path)
-  # TODO[mid]: Fix Dreamer install (fork and fix recursive import)
-  # "dreamer@git+https://github.com/AndrejOrsula/dreamerv3.git@4049794d4135e41c691f18da38a9af7541b01553",
-  "jax==0.11.0",
-]
-sb3 = [
-  #
-  "stable-baselines3",
-  "sb3-contrib",
-  "rl_zoo3",
-]
-sbx = [
-  #
-  "sbx-rl",
-  "tf_keras",
-]
-skrl = [
-  #
-  "skrl==2.1.0",
-]
-robomimic = [
-  #
-  # "robomimic@git+https://github.com/ARISE-Initiative/robomimic.git@TODO",
 ## TensorBoard logging; jaxlib 0.5 breaks the profiler hook of TensorFlow 2.21
 dreamer = ["jax~=0.4,<0.5.1", "tensorflow<2.21"]
 rsl_rl = ["rsl-rl-lib==5.5.1"]
@@ -310,20 +280,6 @@ event-reconstruction = [
 hw = ["srb[spacemouse]"]
 spacemouse = ["pyspacemouse~=1.0"]
 ## Logging
-logging = [
-  #
-  "srb[wandb]",
-  "srb[tensorboard]",
-]
-wandb = [
-  #
-  "wandb",
-]
-tensorboard = [
-  #
-  "tensorboard",
-  "tensorflow",
-]
 logging = ["srb[wandb]", "srb[tensorboard]"]
 wandb = ["wandb==0.31.0"]
 tensorboard = ["tensorboard~=2.0"]
@@ -331,46 +287,6 @@ tensorboard = ["tensorboard~=2.0"]
 cli = [
   "srb[rich]",
   "srb[repl]",
-  "argcomplete",
-  "hydra-core",
-  "omegaconf",
-]
-dev = [
-  #
-  "srb[test]",
-  "srb[tracing]",
-  "srb[typing]",
-  "srb[plots]",
-]
-rich = [
-  #
-  "rich",
-]
-test = [
-  #
-  "pytest",
-  "pytest-order",
-  "pytest-sugar",
-]
-tracing = [
-  #
-  "srb[rich]",
-  "logfire  ",
-]
-typing = [
-  #
-  "mypy",
-  "types-psutil",
-  "types-PyYAML",
-  "types-toml",
-]
-repl = [
-  #
-  "ptpython",
-]
-plots = [
-  #
-  "seaborn",
   "argcomplete~=3.0",
   "hydra-core~=1.0",
   "moviepy>=2.0,<3.0",
@@ -403,9 +319,6 @@ terrain-extras = [
 ## NAIF SPICE sun/planet geometry; ~43 MB kernels download on first use.
 spice = ["spiceypy>=6,<9", "zarr>=2.16,<4", "numcodecs"]
 
-[tool.uv]
-no-build-isolation-package = ["idna-ssl"]
-
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
@@ -425,9 +338,6 @@ explicit = true
 name = "isaac"
 url = "https://pypi.nvidia.com"
 explicit = true
-
-
-
 
 [project.scripts]
 srb = "srb.__main__:main"

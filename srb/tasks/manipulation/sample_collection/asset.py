@@ -5,7 +5,7 @@ import torch
 from simforge import TexResConfig
 
 from srb import assets
-from srb.core.asset import AssetBaseCfg, AssetVariant, Object, RigidObjectCfg
+from srb.core.asset import AssetVariant, Object, RigidObjectCfg
 from srb.core.domain import Domain
 from srb.core.manager import SceneEntityCfg
 from srb.core.mdp import reset_root_state_uniform
@@ -21,20 +21,6 @@ if TYPE_CHECKING:
 class SampleCfg:
     asset_cfg: RigidObjectCfg = MISSING
     state_randomizer: SrbEventTermCfg = MISSING
-
-
-# Resolve forward references in RigidObjectCfg (which uses `from __future__ import annotations`)
-SampleCfg.model_rebuild(
-    _types_namespace={
-        "Articulation": Articulation,
-        "DeformableObject": DeformableObject,
-        "RigidObject": RigidObject,
-        "SpawnerCfg": SpawnerCfg,
-        "Usd": Usd,
-        "Literal": Literal,
-        "InitialStateCfg": AssetBaseCfg.InitialStateCfg,
-    }
-)
 
 
 def select_sample(

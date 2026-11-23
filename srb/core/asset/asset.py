@@ -8,6 +8,7 @@ from typing import (
     Any,
     ClassVar,
     Iterable,
+    Literal,
     Mapping,
     Sequence,
     Set,
@@ -28,6 +29,7 @@ from srb.core.registry_seam import register_asset_registry
 from srb.core.sim import (
     ArticulationRootPropertiesCfg,
     CollisionPropertiesCfg,
+    GroundPlaneCfg,
     MultiAssetSpawnerCfg,
     RigidBodyPropertiesCfg,
     ShapeCfg,

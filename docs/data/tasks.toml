@@ -133,6 +133,26 @@ tagline = "Locomotion with legged robots and humanoids while tracking desired ve
 video_id = "aNYNWzyHPqM"
 success_signal = "return_only"
 
+[obstacle_crossing]
+tagline = "Legged traversal along a course with a fixed obstacle"
+video_id = ""
+
+[lunar_obstacle_crossing]
+tagline = "Ground robot navigation through a field of lunar rocks"
+video_id = ""
+
+[lunar_obstacle_crossing_visual]
+tagline = "Lunar obstacle navigation with onboard camera observations"
+video_id = ""
+
+[locomotion_lunar_obstacle_crossing]
+tagline = "Legged locomotion across lunar terrain with scattered rock obstacles"
+video_id = ""
+
+[locomotion_lunar_obstacle_crossing_visual]
+tagline = "Legged lunar obstacle crossing with onboard camera observations"
+video_id = ""
+
 [waypoint_navigation]
 tagline = "Navigation to a dynamic waypoint"
 video_id = "fXtG5wGvWt0"

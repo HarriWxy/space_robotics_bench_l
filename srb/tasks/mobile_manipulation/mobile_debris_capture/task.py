@@ -1,6 +1,7 @@
 from dataclasses import MISSING
 
 import torch
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 from srb import assets
 from srb._typing import ObservationGroup, StepReturn
@@ -13,7 +14,6 @@ from srb.core.asset import (
     RigidObjectCfg,
 )
 from srb.core.env import (
-    KitVisualizerCfg,
     OrbitalManipulationEnv,
     OrbitalManipulationEnvCfg,
     OrbitalManipulationEventCfg,
@@ -236,7 +236,7 @@ class Task(SrbEnv, OrbitalManipulationEnv):
 
         joint_pos_end_effector = (
             self._end_effector.data.joint_pos
-            if isinstance(self._end_effector, Articulation)
+            if isinstance(self._end_effector, BaseArticulation)
             else None
         )
         joint_pos_end_effector_normalized = (
@@ -245,7 +245,7 @@ class Task(SrbEnv, OrbitalManipulationEnv):
                 self._end_effector.data.soft_joint_pos_limits,
             )
             if joint_pos_end_effector is not None
-            and isinstance(self._end_effector, Articulation)
+            and isinstance(self._end_effector, BaseArticulation)
             else (
                 joint_pos_end_effector
                 if joint_pos_end_effector is not None

@@ -13,6 +13,7 @@ from srb.core.action import (
     RelativeJointPositionActionCfg,
 )
 from srb.core.action.action_group import ActionGroup
+from srb.core.action.term.common.scalar_joint_position import ScalarJointPositionActionCfg
 from srb.core.command_mapping import CommandDestination, CommandMapping, EventSign
 from srb.core.spec import TermSpec, spec
 from srb.utils.cfg import configclass
@@ -148,6 +149,14 @@ class JointPositionBinaryActionGroup(ActionGroup):
         return self._declared_command_mapping(_BINARY_JOINT_POSITION_COMMAND_MAPPING)
 
 
+@configclass
+class JointPositionScalarActionGroup(ActionGroup):
+    joint_pos: ScalarJointPositionActionCfg = MISSING  # type: ignore[assignment]
+
+    def map_cmd_to_action(self, twist: torch.Tensor, event: bool) -> torch.Tensor:
+        return torch.Tensor((-1.0 if event else 1.0,)).to(device=twist.device)
+
+
 @spec(
     kind="action",
     fields=[
@@ -160,14 +169,6 @@ class JointPositionBinaryActionGroup(ActionGroup):
         ),
     ],
 )
-@configclass
-class JointPositionScalarActionGroup(ActionGroup):
-    joint_pos: ScalarJointPositionActionCfg = MISSING  # type: ignore
-
-    def map_cmd_to_action(self, twist: torch.Tensor, event: bool) -> torch.Tensor:
-        return torch.Tensor((-1.0 if event else 1.0,)).to(device=twist.device)
-
-
 @configclass
 class JointVelocityActionGroup(ActionGroup):
     joint_vel: JointVelocityActionCfg = JointVelocityActionCfg(

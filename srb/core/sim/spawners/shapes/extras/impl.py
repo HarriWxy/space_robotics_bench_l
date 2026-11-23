@@ -13,6 +13,7 @@ from pxr import Usd
 from srb.core.sim import schemas
 from srb.core.sim.prim_utils import (
     create_prim,
+    get_current_stage,
     get_prim_at_path,
     is_prim_path_valid,
 )
@@ -52,8 +53,8 @@ def spawn_arrow(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    stage = sim_utils.get_current_stage()
-    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)
+    stage = get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(
@@ -127,8 +128,8 @@ def spawn_pinned_arrow(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    stage = sim_utils.get_current_stage()
-    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)
+    stage = get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(
@@ -214,8 +215,8 @@ def spawn_pinned_sphere(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
 ) -> Usd.Prim:
-    stage = sim_utils.get_current_stage()
-    if stage.GetPrimAtPath(prim_path).IsValid():  # prim_utils.is_prim_path_valid(prim_path)    
+    stage = get_current_stage()
+    if stage.GetPrimAtPath(prim_path).IsValid():
         raise ValueError(f"A prim already exists at path: '{prim_path}'.")
 
     prim = prim_utils.create_prim(

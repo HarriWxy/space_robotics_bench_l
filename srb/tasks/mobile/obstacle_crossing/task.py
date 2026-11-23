@@ -1,11 +1,12 @@
 from typing import Sequence
 
 import torch
+from isaaclab.utils.math import matrix_from_quat
 
 from srb._typing import StepReturn
 from srb.core.env import GroundEnv, GroundEnvCfg, GroundEventCfg, GroundSceneCfg
 from srb.utils.cfg import configclass
-from srb.utils.math import matrix_from_quat, rotmat_to_rot6d
+from srb.utils.math import rotmat_to_rot6d
 
 ##############
 ### Config ###
@@ -53,7 +54,7 @@ class Task(GroundEnv):
         super()._reset_idx(env_ids)
 
     def extract_step_return(self) -> StepReturn:
-        return _compute_step_return(
+        step_data = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
@@ -71,6 +72,7 @@ class Task(GroundEnv):
             imu_lin_acc=self._imu_robot.data.lin_acc_b.torch,
             imu_ang_vel=self._imu_robot.data.ang_vel_b.torch,
         )
+        return StepReturn.from_tuple(step_data)
 
 
 @torch.jit.script
@@ -93,7 +95,12 @@ def _compute_step_return(
     imu_ang_vel: torch.Tensor,
     ## Command
     command: torch.Tensor,
-) -> StepReturn:
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]],
+    dict[str, torch.Tensor],
+    torch.Tensor,
+    torch.Tensor,
+]:
     num_envs = episode_length.size(0)
     device = episode_length.device
     reward=torch.zeros(num_envs, device=device)
@@ -112,7 +119,7 @@ def _compute_step_return(
     penalty_undesired_lin_vel_z=torch.zeros(num_envs, dtype=torch.bool, device=device)
     penalty_undesired_ang_vel_xy=torch.zeros(num_envs, dtype=torch.bool, device=device)
 
-    return StepReturn(
+    return (
         {
             "state": {
                 "tf_rot6d_robot": tf_rot6d_robot,

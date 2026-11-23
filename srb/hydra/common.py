@@ -4,6 +4,16 @@ import json
 from typing import Any, Callable, Set
 
 
+def hydra_version_base_kwargs() -> dict[str, None]:
+    """Select the running Hydra version's defaults across the API change."""
+    from hydra import __version__
+    from packaging.version import Version
+
+    if Version(__version__) < Version("1.4.0.dev8"):
+        return {"version_base": None}
+    return {}
+
+
 def replace_enums_with_strings(cfg: dict[str, Any]) -> dict[str, Any]:
     def _serialize_enum(obj: enum.Enum) -> str:
         enum_class = obj.__class__
