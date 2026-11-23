@@ -1,24 +1,31 @@
-from isaaclab.sim import *  # noqa: F403
-from isaaclab_physx.sim.schemas.schemas_cfg import  (
-    PhysxDeformableBodyPropertiesCfg as DeformableBodyPropertiesCfg,
-    PhysxRigidBodyPropertiesCfg as RigidBodyPropertiesCfg, 
-    PhysxCollisionPropertiesCfg as CollisionPropertiesCfg,
-    PhysxJointDrivePropertiesCfg as JointDrivePropertiesCfg,
-    PhysxArticulationRootPropertiesCfg as ArticulationRootPropertiesCfg,
-	PhysxFixedTendonPropertiesCfg as FixedTendonPropertiesCfg,
-    )
+# Compat shim: in IsaacLab develop the deformable-body material configs live
+# under `isaaclab_physx.sim.spawners.materials`, but simforge's IsaacLab
+# integration still imports `DeformableBodyMaterialCfg` from
+# `isaaclab.sim.spawners`. Re-export under the legacy path so simforge can
+# resolve its imports during cfg.py module load.
+try:
+    import isaaclab.sim.spawners as _ils
 
-from isaaclab_physx.sim.spawners.materials import (
-    PhysxDeformableBodyMaterialCfg as DeformableBodyMaterialCfg,
-    PhysxRigidBodyMaterialCfg as RigidBodyMaterialCfg,
-    )
+    if not hasattr(_ils, "DeformableBodyMaterialCfg"):
+        from isaaclab_physx.sim.spawners.materials import (
+            DeformableBodyMaterialCfg as _DBMC,
+        )
 
-from isaaclab_physx.physics import PhysxCfg  # noqa: F401
-from isaaclab_physx.renderers import IsaacRtxRendererGlobalSettingsCfg as RenderCfg
-from isaaclab_physx.renderers.isaac_rtx_renderer_utils import (
-    apply_isaac_rtx_global_settings,
-)
+        _ils.DeformableBodyMaterialCfg = _DBMC
+        del _DBMC
+    del _ils
+except Exception:
+    pass
 
+from isaaclab.sim import *  # noqa: F403, E402
 
-from .schemas import *  # noqa: F403
-from .spawners import *  # noqa: F403
+# Backward compatibility for task modules that import object/rigid object config from
+# the legacy ``srb.core.sim`` path. Isaac Lab exposes these symbols under
+# ``isaaclab.assets`` in newer releases.
+try:
+    from isaaclab.assets import RigidObjectCfg  # noqa: F401
+except Exception:
+    pass
+
+from .schemas import *  # noqa: F403, E402
+from .spawners import *  # noqa: F403, E402

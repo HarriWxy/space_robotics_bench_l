@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Literal, Sequence, Tuple
+from typing import Literal, Sequence
 
 from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.sim.spawners.spawner_cfg import SpawnerCfg
@@ -19,7 +19,7 @@ class MultiShapeSpawnerCfg(MultiAssetSpawnerCfg, ShapeCfg):
     shapes: Sequence[Literal["cuboid", "sphere", "cylinder", "capsule", "cone"]] = ()
     """Shapes to spawn (keep empty to consider all shapes)"""
 
-    scale: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     """Scale of cuboid (affects other shapes if radius and height remain unset)"""
 
     radius: float | None = None

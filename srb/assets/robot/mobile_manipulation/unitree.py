@@ -1,10 +1,18 @@
+from typing import ClassVar
+
 from srb.core.action import (
     ActionGroup,
-    JointPositionActionCfg,
-    JointPositionActionGroup,
+    JointPositionBoundedActionGroup,
 )
 from srb.core.actuator import ImplicitActuatorCfg
-from srb.core.asset import ArticulationCfg, Frame, Humanoid, Transform
+from srb.core.asset import ArticulationCfg, Frame, Humanoid
+from srb.core.sensor import (
+    CameraCfg,
+    ContactSensorCfg,
+    ImuCfg,
+    PinholeCameraCfg,
+    SensorBaseCfg,
+)
 from srb.core.sim import (
     ArticulationRootPropertiesCfg,
     CollisionPropertiesCfg,
@@ -127,20 +135,35 @@ class UnitreeH1(Humanoid):
         },
     )
 
+    sensor_cfgs: dict[str, SensorBaseCfg] = {
+        "imu_robot": ImuCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_h1/pelvis",
+        ),
+        "contacts_feet": ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_h1/(left|right)_ankle_link",
+        ),
+        "cam_front": CameraCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_h1/pelvis/camera_front",
+            # Use the front torso mesh vertex (0.1248, 0.0, 0.6884) m. The
+            # torso joint is at the pelvis origin, so this pelvis-fixed camera
+            # does not follow torso yaw. Aim +x, with image up +z (ROS optical
+            # frame).
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.1248, 0.0, 0.6884),
+                rot=rpy_to_quat(-90.0, 0.0, -90.0),
+                convention="ros",
+            ),
+            spawn=PinholeCameraCfg(),
+        ),
+    }
+
     ## Actions
-    actions: ActionGroup = JointPositionActionGroup(
-        JointPositionActionCfg(asset_name="robot", joint_names=[".*"], scale=0.5)
-    )
+    action_modes: ClassVar[dict[str, ActionGroup]] = {
+        "joint_pos": JointPositionBoundedActionGroup(),
+    }
 
     ## Frames
     frame_base: Frame = Frame(prim_relpath="pelvis")
-    frame_front_camera: Frame = Frame(
-        prim_relpath="pelvis/camera_front",
-        offset=Transform(
-            pos=(-0.7675, 0.0, 1.9793),
-            rot=rpy_to_quat(0.0, 15.0, -90.0),
-        ),
-    )
 
     ## Links
     regex_feet_links: str = "(left|right)_ankle_link"
@@ -260,21 +283,30 @@ class UnitreeG1(Humanoid):
         },
     )
 
+    sensor_cfgs: dict[str, SensorBaseCfg] = {
+        "imu_robot": ImuCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_g1/pelvis",
+        ),
+        "contacts_feet": ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_g1/(left|right)_ankle_roll_link",
+        ),
+        "cam_front": CameraCfg(
+            prim_path="{ENV_REGEX_NS}/unitree_g1/pelvis/camera_front",
+            offset=CameraCfg.OffsetCfg(
+                pos=(-0.7675, 0.0, 1.9793),
+                rot=rpy_to_quat(0.0, 15.0, -90.0),
+            ),
+            spawn=PinholeCameraCfg(),
+        ),
+    }
+
     ## Actions
-    actions: ActionGroup = JointPositionActionGroup(
-        JointPositionActionCfg(asset_name="robot", joint_names=[".*"], scale=0.5)
-    )
+    action_modes: ClassVar[dict[str, ActionGroup]] = {
+        "joint_pos": JointPositionBoundedActionGroup(),
+    }
 
     ## Frames
     frame_base: Frame = Frame(prim_relpath="pelvis")
-    frame_imu: Frame | None = Frame(prim_relpath="imu_link")
-    frame_front_camera: Frame = Frame(
-        prim_relpath="pelvis/camera_front",
-        offset=Transform(
-            pos=(-0.7675, 0.0, 1.9793),
-            rot=rpy_to_quat(0.0, 15.0, -90.0),
-        ),
-    )
 
     ## Links
     regex_feet_links: str = "(left|right)_ankle_roll_link"

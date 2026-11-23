@@ -1,3 +1,4 @@
+## Barebones
 [package]
 title = "Space Robotics Bench | Barebones"
 description = "Barebones experience for the Space Robotics Bench"
@@ -5,30 +6,23 @@ version = "0.0.1"
 keywords = ["benchmark", "robotics", "simulation", "space"]
 
 
+## Extensions
 [dependencies]
-## Barebones
-"omni.kit.loop-isaac" = {}
-"omni.physics" = {}
-"omni.physics.physx" = {}
-"omni.physics.stageupdate" = {}
-"omni.physx" = {}
-"omni.physx.tensors" = {}
-"isaacsim.core.version" = {}
-"isaacsim.simulation_app" = {}
-"isaacsim.storage.native" = {}
-"omni.usd.schema.mujoco" = {}
+"isaacsim.core.api" = {}
+"isaacsim.core.cloner" = {}
 
 
 [settings]
-## Extensions
 app.exts.folders = [
     "${exe-path}/exts",
     "${exe-path}/extscore",
     "${exe-path}/../exts",
     "${exe-path}/../extscache",
+    "${exe-path}/../extsDeprecated",
     "${exe-path}/../extsPhysics",
     "${exe-path}/../isaacsim/exts",
     "${exe-path}/../isaacsim/extscache",
+    "${exe-path}/../isaacsim/extsDeprecated",
     "${exe-path}/../isaacsim/extsPhysics",
 ]
 
@@ -41,6 +35,7 @@ exts."omni.kit.window.modifier.titlebar".titleFormatString = "Space Robotics Ben
 ## UI
 app.window.hideUi = false
 app.window.iconPath = "${app}/../docs/theme/favicon.png"
+## Miscellaneous
 app.file.ignoreUnsavedOnExit = true
 
 ## Viewport
@@ -117,7 +112,8 @@ exts."omni.kit.renderer.core".present.enabled = false
 exts."omni.kit.renderer.core".present.presentAfterRendering = false
 
 ## Asset path
-persistent.isaac.asset_root.cloud = "http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0"
+persistent.isaac.asset_root.default = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.2"
+persistent.isaac.asset_root.cloud = "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.2"
 
 app.settings.persistent = true
 [settings.persistent]

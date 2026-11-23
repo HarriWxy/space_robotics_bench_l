@@ -11,10 +11,9 @@ gamma: 0.997
 learning_rate: lin_0.0001
 max_grad_norm: 1 # 0.5
 n_epochs: 16
-n_steps: 24
-normalize: false # true
-sde_sample_freq: 4
-vf_coef: 1  #0.5
+n_steps: 128
+normalize: true
+vf_coef: 0.5
 policy_kwargs: "dict(
   log_std_init=0,
   net_arch=[512, 256, 128],

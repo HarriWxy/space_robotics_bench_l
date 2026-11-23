@@ -1,483 +1,351 @@
-"""Run Isaac Lab's RSL-RL PPO agent on an SRB environment."""
-
 from __future__ import annotations
 
-import copy
-import json
-import re
+import math
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
+from isaacsim.simulation_app import SimulationApp
 
-from srb.integrations.rsl_rl.logging import SrbRslRlLogger
-from srb.integrations.rsl_rl.wrapper import SrbRslRlVecEnvWrapper
-from srb.integrations.tensorboard import canonical_tag
+from srb.integrations.eval_quota import (
+    EpisodeQuota,
+    eval_episode_budget,
+    eval_max_steps,
+    finite_mean,
+    write_eval_result,
+)
+from srb.integrations.rsl_rl.wrapper import RslRlVecEnvWrapper
 from srb.utils import logging
-from srb.wrappers import maybe_wrap_action_smoothing
+from srb.utils.checkpoint import find_rsl_rl_checkpoint
+from srb.utils.path import new_eval_logdir
 
 if TYPE_CHECKING:
-    import gymnasium
-    from isaacsim.simulation_app import SimulationApp
+    from rsl_rl.runners import OnPolicyRunner
 
     from srb._typing import AnyEnv, AnyEnvCfg
 
 
-FRAMEWORK_NAME = "rsl_rl"
-
-
-_RUNNER_DEFAULTS: dict[str, Any] = {
-    "class_name": "OnPolicyRunner",
-    "seed": 42,
-    "device": None,
-    "num_steps_per_env": 24,
-    "init_at_random_ep_len": True,
-    "max_iterations": 500,
-    "empirical_normalization": False,
-    "obs_groups": {
-        "actor": ["proprio", "proprio_dyn", "command"],
-        "critic": ["proprio", "proprio_dyn", "command"],
-    },
-    "clip_actions": None,
-    "check_for_nan": True,
-    "save_interval": 50,
-    "experiment_name": "srb_rsl_rl_ppo",
-    "run_name": "",
-    "logger": "tensorboard",
-    "neptune_project": "isaaclab",
-    "wandb_project": "isaaclab",
-    "resume": False,
-    "load_run": ".*",
-    "load_checkpoint": "model_.*.pt",
-    "eval_steps": 10_000,
-    "eval_log_interval": 100,
-}
-
-_ACTOR_DEFAULTS: dict[str, Any] = {
-    "class_name": "MLPModel",
-    "hidden_dims": [128, 128, 128],
-    "activation": "elu",
-    "obs_normalization": False,
-    "distribution_cfg": {
-        "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar",
-    },
-}
-
-_CRITIC_DEFAULTS: dict[str, Any] = {
-    "class_name": "MLPModel",
-    "hidden_dims": [128, 128, 128],
-    "activation": "elu",
-    "obs_normalization": False,
-}
-
-_ALGORITHM_DEFAULTS: dict[str, Any] = {
-    "class_name": "PPO",
-    "value_loss_coef": 1.0,
-    "use_clipped_value_loss": True,
-    "clip_param": 0.2,
-    "entropy_coef": 0.01,
-    "num_learning_epochs": 5,
-    "num_mini_batches": 4,
-    "learning_rate": 1.0e-3,
-    "schedule": "adaptive",
-    "gamma": 0.99,
-    "lam": 0.95,
-    "desired_kl": 0.01,
-    "max_grad_norm": 1.0,
-    "optimizer": "adam",
-    "normalize_advantage_per_mini_batch": False,
-    "share_cnn_encoders": False,
-    "rnd_cfg": None,
-    "symmetry_cfg": None,
-}
-
-_CHECKPOINT_PATTERN = re.compile(r"^model_(\d+)\.pt$")
-
-
 def run(
     workflow: Literal["train", "eval"],
-    algo: str,
-    env: AnyEnv | gymnasium.Env,
+    env: "AnyEnv",
     sim_app: SimulationApp,
     env_id: str,
-    env_cfg: AnyEnvCfg | None,
-    agent_cfg: Mapping[str, Any] | object,
+    env_cfg: "AnyEnvCfg | None",
+    agent_cfg: dict,
     logdir: Path,
-    model: Path | None = None,
+    model: Path,
     continue_training: bool | None = None,
-    **kwargs: Any,
+    **kwargs,
 ) -> None:
-    """Train or evaluate RSL-RL PPO inside an already-created SRB env."""
-    if algo != "ppo":
-        raise ValueError(
-            f"Unsupported RSL-RL algorithm '{algo}'. SRB currently exposes only rsl_rl_ppo."
+    evaluation_logdir = kwargs.pop("evaluation_logdir", None)
+    kwargs.pop("run_metadata", None)
+
+    from rsl_rl.runners import OnPolicyRunner
+
+    training_logdir = logdir
+
+    # Determine checkpoint path
+    from_checkpoint = find_rsl_rl_checkpoint(
+        training_logdir, model, workflow, continue_training
+    )
+    if from_checkpoint:
+        logging.info(f"Loading model from {from_checkpoint}")
+    elif continue_training:
+        logging.info(
+            "continue_training requested but no checkpoint found — starting fresh"
         )
 
-    try:
-        from rsl_rl.runners import OnPolicyRunner
-    except ImportError as exc:
-        raise ImportError(
-            "rsl_rl_ppo requires rsl-rl-lib and Isaac Lab's isaaclab_rl package. "
-            "Install the SRB rsl_rl extra in the srb environment."
-        ) from exc
+    # Special handling for eval workflow
+    if workflow == "eval":
+        logdir = (
+            evaluation_logdir
+            if evaluation_logdir is not None
+            else new_eval_logdir(training_logdir)
+        )
 
-    raw_cfg = _as_dict(agent_cfg)
-    smoothing_cfg = raw_cfg.pop("smoothing", {})
-    env = maybe_wrap_action_smoothing(env, smoothing_cfg)  # type: ignore[arg-type]
-
-    env_device = _resolve_env_device(env)
-    cfg = _build_config(
-        raw_cfg,
-        env_cfg=env_cfg,
-        env_id=env_id,
-        env_device=env_device,
+    # Determine device — agent_cfg override (from hyperparam yaml) wins over
+    # env_cfg.sim.device; fall back to CUDA if nothing is available.
+    device = agent_cfg.pop(
+        "device",
+        env_cfg.sim.device if env_cfg and hasattr(env_cfg, "sim") else "cuda",
     )
 
-    wrapped_env = SrbRslRlVecEnvWrapper(
+    # Wrap the environment
+    clip_actions = agent_cfg.pop("clip_actions", None)
+    # Eval loops poll the app themselves and report an interrupted run.
+    env = RslRlVecEnvWrapper(  # type: ignore[misc]
         env,
-        clip_actions=cfg["clip_actions"],
-        obs_groups=cfg["obs_groups"],
+        clip_actions=clip_actions,
+        is_running=sim_app.is_running if workflow == "train" else None,
     )
-    observations = wrapped_env.get_observations()
-    _validate_runtime_contract(wrapped_env, observations, cfg)
-    _write_resolved_config(logdir, cfg, env_id=env_id, workflow=workflow)
 
-    from_checkpoint = _resolve_checkpoint(
-        workflow=workflow,
-        logdir=logdir,
-        model=model,
-        continue_training=bool(continue_training),
-    )
-    if from_checkpoint:
-        logging.info(f"Loading RSL-RL checkpoint from {from_checkpoint}")
-        if not (from_checkpoint.parent / "rsl_rl_config.json").is_file():
-            logging.warning(
-                "Checkpoint has no SRB RSL-RL observation manifest; matching tensor "
-                "shapes do not prove that observation ordering and semantics match."
-            )
+    # Extract max_iterations before passing config to runner
+    max_iterations = agent_cfg.pop("max_iterations", 10000)
 
-    runner_logdir = logdir if workflow == "train" else None
+    # Create the runner
     runner = OnPolicyRunner(
-        wrapped_env,
-        train_cfg=copy.deepcopy(cfg),
-        log_dir=runner_logdir.as_posix() if runner_logdir else None,
-        device=cfg["device"],
+        env,  # type: ignore[misc]
+        train_cfg=agent_cfg,
+        log_dir=str(logdir),
+        device=device,
     )
-    runner.logger = SrbRslRlLogger(runner.logger)
-    runner.add_git_repo_to_log(__file__)
 
+    # Load checkpoint if needed
     if from_checkpoint:
-        runner.load(from_checkpoint.as_posix(), map_location=cfg["device"])
+        runner.load(from_checkpoint)
+        logging.info(f"Loaded checkpoint from {from_checkpoint}")
 
     if workflow == "train":
-        runner.learn(
-            num_learning_iterations=int(cfg["max_iterations"]),
-            init_at_random_ep_len=bool(cfg["init_at_random_ep_len"]),
-        )
-    else:
-        _evaluate(
-            runner=runner,
-            env=wrapped_env,
-            sim_app=sim_app,
-            logdir=logdir,
-            cfg=cfg,
-        )
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, Mapping):
-        return copy.deepcopy(dict(value))
-    if hasattr(value, "to_dict"):
-        return copy.deepcopy(value.to_dict())
-    if hasattr(value, "__dict__"):
-        return copy.deepcopy(vars(value))
-    raise TypeError(f"RSL-RL agent config must be a mapping, got {type(value).__name__}")
-
-
-def _deep_merge(base: Mapping[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
-    merged = copy.deepcopy(dict(base))
-    for key, value in updates.items():
-        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = copy.deepcopy(value)
-    return merged
-
-
-def _build_config(
-    agent_cfg: Mapping[str, Any],
-    *,
-    env_cfg: Any,
-    env_id: str,
-    env_device: torch.device,
-) -> dict[str, Any]:
-    cfg = _deep_merge(
-        _RUNNER_DEFAULTS,
-        {
-            **agent_cfg,
-            "actor": _deep_merge(_ACTOR_DEFAULTS, agent_cfg.get("actor", {})),
-            "critic": _deep_merge(_CRITIC_DEFAULTS, agent_cfg.get("critic", {})),
-            "algorithm": _deep_merge(
-                _ALGORITHM_DEFAULTS, agent_cfg.get("algorithm", {})
-            ),
-        },
-    )
-
-    configured_device = cfg.get("device")
-    if configured_device in (None, "auto"):
-        cfg["device"] = str(env_device)
-    else:
         try:
-            requested_device = torch.device(configured_device)
-        except (RuntimeError, TypeError) as exc:
-            raise ValueError(f"Invalid RSL-RL device '{configured_device}'.") from exc
-        cfg["device"] = str(requested_device)
-
-    if "seed" not in agent_cfg and env_cfg is not None:
-        cfg["seed"] = int(getattr(env_cfg, "seed", cfg["seed"]))
-    cfg["experiment_name"] = cfg.get("experiment_name") or (
-        f"srb_{env_id.rsplit('/', 1)[-1]}_rsl_rl_ppo"
-    )
-
-    for key in ("num_steps_per_env", "max_iterations", "save_interval"):
-        if int(cfg[key]) <= 0:
-            raise ValueError(f"RSL-RL config '{key}' must be positive, got {cfg[key]}")
-    for key in ("eval_steps", "eval_log_interval"):
-        if int(cfg[key]) <= 0:
-            raise ValueError(f"RSL-RL config '{key}' must be positive, got {cfg[key]}")
-
-    obs_groups = cfg.get("obs_groups")
-    if (
-        not isinstance(obs_groups, Mapping)
-        or not obs_groups.get("actor")
-        or not obs_groups.get("critic")
-    ):
-        raise ValueError(
-            "RSL-RL config must define non-empty obs_groups for both actor and critic."
-        )
-    if not isinstance(cfg.get("actor"), Mapping) or not isinstance(cfg.get("critic"), Mapping):
-        raise ValueError(  # noqa: TRY004
-            "RSL-RL config must define actor and critic mappings."
-        )
-    if not isinstance(cfg.get("algorithm"), Mapping):
-        raise ValueError(  # noqa: TRY004
-            "RSL-RL config must define an algorithm mapping."
-        )
-
-    return cfg
+            runner.learn(num_learning_iterations=max_iterations)
+        except KeyboardInterrupt:
+            # The runner saves the final model only after its loop completes.
+            if runner.logger.writer is not None:
+                it = runner.current_learning_iteration
+                runner.save(os.path.join(runner.logger.log_dir, f"model_{it}.pt"))
+                runner.logger.stop_logging_writer()
+                logging.info("Saved RSL-RL checkpoint after interruption")
+            raise
+    elif workflow == "eval":
+        _eval(runner, env, sim_app, evaluation_logdir=Path(logdir))
 
 
-def _resolve_env_device(env: Any) -> torch.device:
-    unwrapped = getattr(env, "unwrapped", env)
-    device = getattr(unwrapped, "device", getattr(env, "device", "cpu"))
-    return torch.device(device)
-
-
-def _validate_runtime_contract(
-    env: SrbRslRlVecEnvWrapper,
-    observations: Any,
-    cfg: Mapping[str, Any],
-) -> None:
-    if observations.batch_size != torch.Size([env.num_envs]):
-        raise ValueError(
-            "RSL-RL expects a TensorDict with batch shape "
-            f"[{env.num_envs}], got {observations.batch_size}."
-        )
-    if int(env.num_actions) <= 0:
-        raise ValueError(f"SRB environment exposes an invalid action dimension: {env.num_actions}")
-
-
-def _resolve_checkpoint(
+def _eval(
+    runner: "OnPolicyRunner",
+    env: RslRlVecEnvWrapper,
+    sim_app: SimulationApp,
     *,
-    workflow: Literal["train", "eval"],
-    logdir: Path,
-    model: Path | None,
-    continue_training: bool,
-) -> Path | None:
-    if model is not None:
-        checkpoint = Path(model).expanduser().resolve()
-        if not checkpoint.is_file():
-            raise FileNotFoundError(f"RSL-RL checkpoint does not exist: {checkpoint}")
-        return checkpoint
+    evaluation_logdir: Path | None = None,
+) -> dict[str, Any] | None:
+    """Run evaluation loop with a trained policy.
 
-    if workflow == "eval" or continue_training:
-        checkpoint = _last_checkpoint(logdir)
-        if checkpoint is None:
-            raise FileNotFoundError(
-                f"No RSL-RL checkpoint matching model_<iteration>.pt was found in {logdir}"
+    By default, visualize until the simulator stops. ``SRB_EVAL_EPISODES``
+    enables bounded evaluation with a fixed per-environment quota, avoiding
+    over-representation of short episodes. Success requires a valid
+    per-environment ``success`` signal. Keep ``env.truncate_episodes=true``
+    (the default) to ensure every environment reaches a verdict before the
+    step budget expires.
+
+    Reset recurrent policy state for each environment when its episode ends.
+    """
+    n_target = eval_episode_budget()
+    policy = runner.get_inference_policy(device=env.device)
+    obs = env.get_observations()
+
+    if n_target is None:
+        while sim_app.is_running():
+            with torch.inference_mode():
+                actions = policy(obs)
+            obs, _, dones, _ = env.step(actions)
+            _reset_finished_rows(policy, dones)
+        return None
+
+    num_envs = int(getattr(env, "num_envs", 0) or 0)
+    if num_envs <= 0:
+        raise ValueError(
+            f"RSL-RL evaluation requires a positive num_envs, got {num_envs}"
+        )
+    max_steps = eval_max_steps(env, n_target)
+    # The wrapper reset every row on construction, so no episode was already
+    # in progress when evaluation began.
+    quota = EpisodeQuota(n_target, num_envs)
+    episode_returns = [0.0] * num_envs
+    completed_returns: list[float] = []
+    success_values: list[bool | None] = []
+    metric_names = {
+        "formation_distance_error": "mean_distance_error",
+        "formation_orientation_error": "mean_yaw_error",
+        "success_hold_steps": "mean_hold_steps_at_done",
+    }
+    metric_sums = dict.fromkeys(metric_names, 0.0)
+    metric_counts = dict.fromkeys(metric_names, 0)
+    step_count = 0
+    while sim_app.is_running() and not quota.complete and step_count < max_steps:
+        with torch.inference_mode():
+            actions = policy(obs)
+        obs, rewards, dones, extras = env.step(actions)
+        step_count += 1
+        reward_values = _per_env_tensor(rewards, num_envs)
+        if reward_values is None:
+            raise ValueError(
+                "RSL-RL evaluation expected one reward per environment, "
+                f"got an invalid value for {num_envs} environments"
             )
-        return checkpoint
+        reward_values = reward_values.to(dtype=torch.float64, device="cpu")
+        if not bool(torch.isfinite(reward_values).all().item()):
+            raise ValueError("RSL-RL evaluation received a non-finite reward")
+        for env_id, reward in enumerate(reward_values.tolist()):
+            episode_returns[env_id] += float(reward)
+            if not math.isfinite(episode_returns[env_id]):
+                raise ValueError(
+                    "RSL-RL evaluation produced a non-finite episode return"
+                )
+
+        done_values = _per_env_tensor(dones, num_envs)
+        if done_values is None:
+            raise ValueError(
+                "RSL-RL evaluation expected one done flag per environment, "
+                f"got an invalid value for {num_envs} environments"
+            )
+        done_values = done_values.to(dtype=torch.bool)
+        _reset_finished_rows(policy, done_values)
+        done_ids = torch.nonzero(done_values.cpu(), as_tuple=False).flatten().tolist()
+        if not done_ids:
+            continue
+
+        success_by_env = _per_env_success(extras, num_envs)
+        metric_by_name = _per_env_metrics(extras, num_envs)
+        for env_id in quota.accept(done_ids):
+            completed_returns.append(episode_returns[env_id])
+            success_values.append(success_by_env[env_id])
+            for metric_name, values in metric_by_name.items():
+                if values is None or values[env_id] is None:
+                    continue
+                metric_sums[metric_name] += values[env_id]
+                if not math.isfinite(metric_sums[metric_name]):
+                    raise ValueError(
+                        "RSL-RL evaluation produced a non-finite episode metric"
+                    )
+                metric_counts[metric_name] += 1
+        for env_id in done_ids:
+            # The vector environment has already reset this row; start the
+            # next episode's return accumulator at zero, whether or not the
+            # finished episode counted toward the row's quota.
+            episode_returns[env_id] = 0.0
+
+    done_count = quota.completed
+    if quota.complete:
+        stop_reason = None
+    elif step_count >= max_steps:
+        stop_reason = "step_budget"
+    elif not sim_app.is_running():
+        stop_reason = "sim_stopped"
+    else:  # pragma: no cover - defensive guard for a future loop change
+        stop_reason = "incomplete"
+
+    complete = quota.complete
+    if not complete:
+        logging.warning(
+            f"RSL-RL evaluation incomplete: {done_count}/{n_target} episodes "
+            f"after {step_count}/{max_steps} steps ({stop_reason})"
+        )
+    has_success = bool(success_values) and all(
+        value is not None for value in success_values
+    )
+    successes = sum(bool(value) for value in success_values) if has_success else None
+    result: dict[str, Any] = {
+        "success_rate": (
+            successes / len(completed_returns)
+            if successes is not None and completed_returns
+            else None
+        ),
+        "successes": successes,
+        "failures": (
+            len(completed_returns) - successes if successes is not None else None
+        ),
+        "mean_return": (
+            finite_mean(completed_returns, "RSL-RL") if completed_returns else None
+        ),
+        "n_episodes": done_count,
+        "episodes_requested": n_target,
+        "episodes_completed": done_count,
+        "complete": complete,
+        "incomplete": not complete,
+        "steps": step_count,
+        "max_steps": max_steps,
+        "stop_reason": stop_reason,
+        **quota.result_fields(),
+    }
+    result.update(
+        {
+            output_name: (
+                metric_sums[metric_name] / metric_counts[metric_name]
+                if metric_counts[metric_name]
+                else None
+            )
+            for metric_name, output_name in metric_names.items()
+        }
+    )
+    write_eval_result(result, evaluation_logdir=evaluation_logdir)
+    return result
+
+
+def _reset_finished_rows(policy: Any, dones: Any) -> None:
+    """Reset recurrent policy state for completed rows, if supported."""
+    reset = getattr(policy, "reset", None)
+    if not callable(reset):
+        return
+    mask = torch.as_tensor(dones).reshape(-1).to(dtype=torch.bool)
+    if not bool(mask.any().item()):
+        return
+    with torch.inference_mode():
+        reset(dones=mask)
+
+
+def _per_env_tensor(value: Any, num_envs: int) -> torch.Tensor | None:
+    """Convert a vector value without broadcasting a scalar across envs."""
+    if isinstance(value, Mapping) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        tensor = torch.as_tensor(value)
+    except (TypeError, ValueError, RuntimeError):
+        return None
+    if tensor.ndim == 0 or tensor.numel() != num_envs:
+        return None
+    return tensor.detach().reshape(-1)
+
+
+def _scalar_success(value: Any) -> bool | None:
+    """Accept only a finite boolean or binary numeric success value."""
+    if isinstance(value, torch.Tensor):
+        if value.numel() != 1:
+            return None
+        value = value.detach().cpu().item()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value) if value in (0, 1) else None
+    if isinstance(value, float):
+        return bool(value) if math.isfinite(value) and value in (0.0, 1.0) else None
     return None
 
 
-def _last_checkpoint(logdir: Path) -> Path | None:
-    if not logdir.is_dir():
-        return None
-    checkpoints: list[tuple[int, Path]] = []
-    for path in logdir.glob("model_*.pt"):
-        match = _CHECKPOINT_PATTERN.match(path.name)
-        if match:
-            checkpoints.append((int(match.group(1)), path))
-    return max(checkpoints, key=lambda item: item[0])[1] if checkpoints else None
+def _per_env_success(extras: Any, num_envs: int) -> list[bool | None]:
+    """Return task success values, or null values for absent/malformed data."""
+    if not isinstance(extras, Mapping) or "success" not in extras:
+        return [None] * num_envs
+    values = _per_env_tensor(extras["success"], num_envs)
+    if values is None:
+        return [None] * num_envs
+    return [_scalar_success(value) for value in values]
 
 
-def _write_resolved_config(
-    logdir: Path,
-    cfg: Mapping[str, Any],
-    *,
-    env_id: str,
-    workflow: str,
-) -> None:
-    logdir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "framework": FRAMEWORK_NAME,
-        "algorithm": "ppo",
-        "workflow": workflow,
-        "env_id": env_id,
-        "config": _jsonable(cfg),
-    }
-    (logdir / "rsl_rl_config.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, (Path, torch.device)):
-        return str(value)
-    return value
-
-
-def _evaluate(
-    *,
-    runner: Any,
-    env: SrbRslRlVecEnvWrapper,
-    sim_app: Any,
-    logdir: Path,
-    cfg: Mapping[str, Any],
-) -> None:
-    writer = _make_summary_writer(logdir / "eval")
-    policy = runner.get_inference_policy(device=cfg["device"])
-    observations = env.get_observations().to(cfg["device"])
-    episode_returns = torch.zeros(env.num_envs, device=env.device)
-    episode_lengths = torch.zeros(env.num_envs, device=env.device)
-    completed_episodes = 0
-
-    for step in range(int(cfg["eval_steps"])):
-        if hasattr(sim_app, "is_running") and not sim_app.is_running():
-            break
-
-        with torch.inference_mode():
-            actions = policy(observations)
-            observations, rewards, dones, extras = env.step(actions.to(env.device))
-            observations = observations.to(cfg["device"])
-
-        episode_returns += rewards
-        episode_lengths += 1
-        done = dones.bool()
-        global_step = (step + 1) * env.num_envs
-
-        if writer is not None:
-            if (step + 1) % int(cfg["eval_log_interval"]) == 0:
-                _write_eval_step_metrics(writer, extras, global_step)
-            if done.any():
-                writer.add_scalar(
-                    "eval/ep_rew_mean",
-                    episode_returns[done].mean().item(),
-                    global_step,
-                )
-                writer.add_scalar(
-                    "eval/ep_len_mean",
-                    episode_lengths[done].mean().item(),
-                    global_step,
-                )
-                _write_eval_episode_metrics(writer, extras, global_step)
-
-        if done.any():
-            completed_episodes += int(done.sum().item())
-            episode_returns[done] = 0.0
-            episode_lengths[done] = 0.0
-
-    if writer is not None:
-        writer.flush()
-        writer.close()
-    logging.info(
-        "RSL-RL evaluation finished after %d environment steps and %d completed episodes.",
-        (step + 1) * env.num_envs if "step" in locals() else 0,
-        completed_episodes,
-    )
-
-
-def _make_summary_writer(logdir: Path):
-    try:
-        from torch.utils.tensorboard import SummaryWriter
-    except ImportError:
-        logging.warning("TensorBoard is unavailable; evaluation scalars will not be written.")
-        return None
-    return SummaryWriter(log_dir=logdir.as_posix())
-
-
-def _write_eval_step_metrics(writer: Any, extras: Mapping[str, Any], step: int) -> None:
-    for key, value in extras.items():
-        if not key.startswith("metrics/"):
+def _per_env_metrics(
+    extras: Any, num_envs: int
+) -> dict[str, list[float | None] | None]:
+    """Extract finite per-environment formation metrics without NaN leakage."""
+    metrics = extras.get("episode_metrics") if isinstance(extras, Mapping) else None
+    if not isinstance(metrics, Mapping):
+        return {
+            "formation_distance_error": None,
+            "formation_orientation_error": None,
+            "success_hold_steps": None,
+        }
+    values_by_name: dict[str, list[float | None] | None] = {}
+    for name in (
+        "formation_distance_error",
+        "formation_orientation_error",
+        "success_hold_steps",
+    ):
+        values = _per_env_tensor(metrics.get(name), num_envs)
+        if values is None:
+            values_by_name[name] = None
             continue
-        name = key.removeprefix("metrics/")
-        if name.startswith("episode_"):
-            continue
-        scalar = _tensor_mean(value)
-        if scalar is not None:
-            writer.add_scalar(canonical_tag(f"eval/metrics/{name}"), scalar, step)
-
-
-def _write_eval_episode_metrics(
-    writer: Any,
-    extras: Mapping[str, Any],
-    step: int,
-) -> None:
-    names = {
-        "episode_success": "eval/episode_success_rate",
-        "episode_failed": "eval/episode_failure_rate",
-        "episode_tracking_fraction": "eval/episode_tracking_fraction",
-        "episode_duration_s": "eval/episode_duration_s",
-        "episode_torso_contact_rate": "eval/episode_torso_contact_rate",
-        "episode_foot_slip_speed": "eval/episode_foot_slip_speed",
-    }
-    completed = _tensor_sum(extras.get("metrics/episode_completed"))
-    if completed is None or completed <= 0.0:
-        return
-    writer.add_scalar("eval/metrics/episode_completed", completed, step)
-    for source_name, target_name in names.items():
-        value = _tensor_sum(extras.get(f"metrics/{source_name}"))
-        if value is not None:
-            writer.add_scalar(target_name, value / completed, step)
-
-
-def _tensor_mean(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        tensor = torch.as_tensor(value, dtype=torch.float32)
-    except (TypeError, ValueError):
-        return None
-    tensor = tensor[torch.isfinite(tensor)]
-    return float(tensor.mean().item()) if tensor.numel() else None
-
-
-def _tensor_sum(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        tensor = torch.as_tensor(value, dtype=torch.float32)
-    except (TypeError, ValueError):
-        return None
-    tensor = tensor[torch.isfinite(tensor)]
-    return float(tensor.sum().item()) if tensor.numel() else None
+        numeric_values: list[float | None] = []
+        for value in values.detach().cpu().tolist():
+            numeric = float(value)
+            numeric_values.append(numeric if math.isfinite(numeric) else None)
+        values_by_name[name] = numeric_values
+    return values_by_name
